@@ -1,0 +1,28 @@
+{
+  "name": "layered-hyperdb",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "dependencies": {
+    "async-each": "^1.0.1",
+    "async-reduce": "0.0.1",
+    "codecs": "^1.2.0",
+    "protocol-buffers": "^4.0.2"
+  },
+  "devDependencies": {
+    "hyperdb": "^2.1.0",
+    "standard": "^10.0.3",
+    "tape": "^4.8.0",
+    "random-access-memory": "^2.4.0"
+  },
+  "scripts": {
+    "test": "standard && tape test/*.js"
+  },
+  "keywords": [
+    "hyperdb",
+    "layer",
+    "dat"
+  ],
+  "author": "Andrew Osheroff <andrewosh@gmail.com>",
+  "license": "MIT"
+}
