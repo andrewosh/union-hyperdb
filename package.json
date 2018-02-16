@@ -1,5 +1,5 @@
 {
-  "name": "layered-hyperdb",
+  "name": "union-hyperdb",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -20,6 +20,7 @@
   },
   "keywords": [
     "hyperdb",
+    "union",
     "layer",
     "dat"
   ],
