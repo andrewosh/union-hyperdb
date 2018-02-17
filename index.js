@@ -232,36 +232,53 @@ UnionDB.prototype._putIndices = function (indices, cb) {
 
 UnionDB.prototype._getIndex = function (cb) {
   if (!this.db) return cb(new Error('Attempting to list from an uninitialized database.'))
+  var self = this
 
   this._isIndexed(function (err, indexed) {
     if (err) return cb(err)
-    if (indexed) {
-      // If already indexed, just spit out the contents of the INDEX subtree.
-
+    if (indexed || !self.parent) {
+      // If already indexed, or there's no parent, just spit out the contents of the INDEX subtree.
+      getLocalIndex(function (err, localIndex) {
+        if (err) return cb(err)
+        return cb(null, localIndex)
+      })
     } else {
       // Otherwise, recursively get the index of the parent and merge with our INDEX subtree.
+      self.parent._getIndex(function (err, parentIndex) {
+        if (err) return cb(err)
+        getLocalIndex(function (err, localIndex) {
+          if (err) return cb(err)
+          Object.keys(parentIndex).forEach(function (pkey) {
+            if (!localIndex[pkey]) {
+              var parentEntry = parentIndex[pkey]
+              parentEntry.layerIndex++
+              localIndex[pkey] = parentEntry
+            }
+          })
+          return cb(null, localIndex)
+        })
+      })
     }
   })
 
-  function getLocalIndex () {
-    var entries = {}
+  function getLocalIndex (cb) {
+    var allEntries = {}
     var diffStream = this.db.createDiffStream(INDEX_PATH)
     diffStream.on('data', function (data) {
       if (data.type === 'put') {
         // We only care about the last put for each key in the layer.
-        entries[data.name] = data.nodes
+        allEntries[data.name] = data.nodes.map(function (node) {
+          return messages.Entry.decode(node)
+        })
       }
     })
     diffStream.once('error', cb)
     diffStream.once('end', function () {
-      var batched = Object.keys(entries).map(function (key) {
-        return {
-          type: 'put',
-          key: key,
-
-        }
+      Object.keys(allEntries).forEach(function (key) {
+        var entries = allEntries[key]
+        allEntries[key] = resolveEntryConflicts(entries)
       })
-      return cb(null, entries)
+      return cb(null, allEntries)
     })
   }
 }
@@ -370,51 +387,19 @@ UnionDB.prototype.index = function (opts, cb) {
   opts = opts || {}
   var self = this
 
-  // Updated in `reducer`.
-  var currentIndex = 0
-
-  this.ready(function (err) {
+  this.getIndex(function (err, index) {
     if (err) return cb(err)
-    reduce(self.layers, reducer, {}, writeIndex)
+    writeIndex(index)
   })
 
-  function reducer (existingEntries, nextLayer, cb) {
-    self._listLayerStats(nextLayer, function (err, nextEntries) {
-      if (err) return cb(err)
-
-      for (var path in nextEntries) {
-        var next = nextEntries[path]
-
-        // If the existing layer does not contain any values for this key, then the subsequent
-        // layer's nodes MUST not contain any layerIndex values.
-
-        // If any nodes in `next` reflect modifications done to this key in the next layer
-        // (either a deletion or a value update), then this layer should overwrite the previous.
-        var deleted = false
-        for (var i = 0; i < next.length; i++) {
-          var decoded = messages.Entry.decode(next[i].value)
-          if ((decoded.deleted !== undefined) || decoded.value) {
-            deleted = deleted || decoded.deleted
-            existingEntries[path] = {
-              idx: currentIndex,
-              deleted: deleted
-            }
-            break
-          }
-        }
-      }
-
-      currentIndex++
-      return cb(null, existingEntries)
-    })
-  }
-
-  function writeIndex (err, entries) {
-    if (err) return cb(err)
-    self._putIndices(entries, function (err) {
+  function writeIndex (index) {
+    self._putIndices(index, function (err) {
       if (err) return cb(err)
       self.indexed = true
-      return cb(null)
+      self._saveMetadata(function (err) {
+        if (err) return cb(err)
+        return cb()
+      })
     })
   }
 }
