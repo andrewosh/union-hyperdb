@@ -26,7 +26,7 @@ function verifyValues (t, db, valuesByKey) {
 }
 
 test('put/get with an index and one layer', function (t) {
-  t.plan(8)
+  t.plan(2 + 3 * 2)
 
   create.fromLayers([
     [
@@ -37,22 +37,13 @@ test('put/get with an index and one layer', function (t) {
     t.error(err)
     db.index(function (err) {
       t.error(err)
-      db.get('a', function (err, nodes) {
-        t.error(err)
-        t.same(nodes.length, 1)
-        t.same(nodes[0].value, 'hello')
-        db.get('b', function (err, nodes) {
-          t.error(err)
-          t.same(nodes.length, 1)
-          t.same(nodes[0].value, 'goodbye')
-        })
-      })
+      verifyValues(t, db, { 'a': 'hello', 'b': 'goodbye' })
     })
   })
 })
 
 test('put/get with an index and two layers', function (t) {
-  t.plan(11)
+  t.plan(2 + 3 * 3)
 
   create.fromLayers([
     [
@@ -67,21 +58,7 @@ test('put/get with an index and two layers', function (t) {
     t.error(err)
     db.index(function (err) {
       t.error(err)
-      db.get('a', function (err, nodes) {
-        t.error(err)
-        t.same(nodes.length, 1)
-        t.same(nodes[0].value, 'dog')
-        db.get('b', function (err, nodes) {
-          t.error(err)
-          t.same(nodes.length, 1)
-          t.same(nodes[0].value, 'goodbye')
-          db.get('c', function (err, nodes) {
-            t.error(err)
-            t.same(nodes.length, 1)
-            t.same(nodes[0].value, 'human')
-          })
-        })
-      })
+      verifyValues(t, db, { 'a': 'dog', 'b': 'goodbye', 'c': 'human' })
     })
   })
 })
