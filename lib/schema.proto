@@ -5,6 +5,7 @@ message DB {
 
 message Metadata {
   repeated DB parents = 1;
+  required bool indexed = 2;
 }
 
 message Link {

@@ -1,7 +1,7 @@
 var p = require('path')
+
 var thunky = require('thunky')
 var codecs = require('codecs')
-var map = require('async-each')
 var reduce = require('async-reduce')
 
 var Trie = require('./lib/trie')
@@ -12,6 +12,29 @@ const INDEX_PATH = '/INDEX/'
 const DATA_PATH = '/DATA/'
 
 module.exports = UnionDB
+
+// This behavior is extracted towards the top so that it's super visible.
+function resolveEntryConflicts (entries) {
+  var winningEntry = {
+    deleted: false,
+    // Hopefully there are never more than 1e12 layers...
+    layerIndex: 1e12
+  }
+  entries.forEach(function (entry) {
+    if (entry.deleted) {
+      // If any entry declares that this value has been deleted in this layer, then assume the
+      // value has been deleted.
+      winningEntry.deleted = true
+    } else if (entry.layerIndex === 0) {
+      // If any entry declares that the latest value is in the current layer, then use that value.
+      winningEntry.layerIndex = 0
+    } else {
+      // Otherwise, the entry with the most recent layer index should win.
+      winningEntry.layerIndex = Math.min(winningEntry.layerIndex, entry.layerIndex)
+    }
+  })
+  return winningEntry
+}
 
 function UnionDB (factory, key, opts) {
   if (!(this instanceof UnionDB)) return new UnionDB(factory, key, opts)
@@ -56,6 +79,34 @@ function UnionDB (factory, key, opts) {
   }
 }
 
+UnionDB.prototype._getMetadata = function (cb) {
+  var self = this
+
+  this.db.ready(function (err) {
+    if (err) return cb(err)
+    self.db.get(META_PATH, function (err, nodes) {
+      if (err) return cb(err)
+      if (nodes.length > 1) console.error('Conflict in metadata file -- using first node\'s value.')
+      return cb(null, messages.Metadata.decode(nodes[0].value))
+    })
+  })
+}
+
+UnionDB.prototype._saveMetadata = function (cb) {
+  var self = this
+
+  this.db.ready(function (err) {
+    if (err) return cb(err)
+    self.db.put(META_PATH, messages.Metadata.encode({
+      parents: [self.parent],
+      indexed: self.indexed
+    }), function (err) {
+      if (err) return cb(err)
+      return cb(null)
+    })
+  })
+}
+
 UnionDB.prototype._loadParent = function (cb) {
   var self = this
 
@@ -72,14 +123,19 @@ UnionDB.prototype._loadParent = function (cb) {
   })
 }
 
+UnionDB.prototype._isIndexed = function (cb) {
+  this._getMetadata(function (err, metadata) {
+    if (err) return cb(err)
+    return cb(null, metadata.indexed)
+  })
+}
+
 UnionDB.prototype._load = function (cb) {
   var self = this
 
-  this.db.get(META_PATH, function (err, nodes) {
+  this._getMetadata(function (err, metadata) {
     if (err) return cb(err)
-    if (nodes.length > 1) return cb(new Error('Read conflict in metadata file.'))
-    var metadata = messages.Metadata.decode(nodes[0].value)
-    // TODO: handle the case of multipe parents? (i.e. a merge)
+    // TODO: handle the case of multiple parents? (i.e. a merge)
     self.parent = metadata.parents[0]
     if (self.parent) return self._loadParent(cb)
     return cb()
@@ -89,9 +145,7 @@ UnionDB.prototype._load = function (cb) {
 UnionDB.prototype._save = function (cb) {
   var self = this
 
-  this.db.put(META_PATH, messages.Metadata.encode({
-    parents: [this.parent]
-  }), function (err) {
+  this._saveMetadata(function (err) {
     if (err) return cb(err)
     if (self.parent) return self._loadParent(cb)
     return cb()
@@ -176,31 +230,46 @@ UnionDB.prototype._putIndices = function (indices, cb) {
   })
 }
 
-UnionDB.prototype._listLayerStats = function (layer, cb) {
-  if (!layer.db) return cb(new Error('Attempting to list from an uninitialized database.'))
+UnionDB.prototype._getIndex = function (cb) {
+  if (!this.db) return cb(new Error('Attempting to list from an uninitialized database.'))
 
-  var entries = {}
-  var diffStream = layer.db.createDiffStream(INDEX_PATH)
-  diffStream.on('data', function (data) {
-    if (data.type === 'put') {
-      // We only care about the last put for each key in the layer.
-      entries[data.name.slice(INDEX_PATH.length)] = data.nodes
+  this._isIndexed(function (err, indexed) {
+    if (err) return cb(err)
+    if (indexed) {
+      // If already indexed, just spit out the contents of the INDEX subtree.
+
+    } else {
+      // Otherwise, recursively get the index of the parent and merge with our INDEX subtree.
     }
   })
-  diffStream.once('error', cb)
-  diffStream.once('end', function () {
-    return cb(null, entries)
-  })
+
+  function getLocalIndex () {
+    var entries = {}
+    var diffStream = this.db.createDiffStream(INDEX_PATH)
+    diffStream.on('data', function (data) {
+      if (data.type === 'put') {
+        // We only care about the last put for each key in the layer.
+        entries[data.name] = data.nodes
+      }
+    })
+    diffStream.once('error', cb)
+    diffStream.once('end', function () {
+      var batched = Object.keys(entries).map(function (key) {
+        return {
+          type: 'put',
+          key: key,
+
+        }
+      })
+      return cb(null, entries)
+    })
+  }
 }
 
 // BEGIN Public API
 
 UnionDB.prototype.get = function (key, cb) {
   var self = this
-
-  var existingNodes = []
-  var nextIndices = []
-  var deleted = false
 
   this.ready(function (err) {
     if (err) return cb(err)
@@ -213,38 +282,19 @@ UnionDB.prototype.get = function (key, cb) {
       }
       if (!nodes) return cb(null, null)
 
-      nodes.forEach(function (node) {
-        var entry = messages.Entry.decode(node.value)
-        console.log('entry:', entry)
-        if (entry.deleted) {
-          deleted = true
-        } else if (entry.layerIndex === 0) {
-          existingNodes.push(entry.layerIndex)
-        } else {
-          nextIndices.push(entry.layerIndex)
-        }
+      var entries = nodes.map(function (node) {
+        return messages.Entry.decode(node.value)
       })
 
-      // If any nodes directly provide values, then stop the recursion and return those values.
-      // Nodes that provide index references to other layers will be ignored -- values take precedence.
-      if (existingNodes.length > 0) {
-        return map(existingNodes, function (node, next) {
-          console.log('doing a _get for key:', key)
-          return self._get(0, key, next)
-        }, function (err, nodes) {
-          nodes = nodes.reduce(function (l, n) { return l.concat(n) })
-          if (err) return cb(err)
-          return cb(null, nodes)
-        })
+      var resolvedEntry = resolveEntryConflicts(entries)
+
+      if (resolvedEntry.deleted) {
+        return cb(null, null)
+      } else if (resolvedEntry.layerIndex === 0) {
+        return self._get(0, key, cb)
+      } else {
+        return self._get(resolvedEntry.layerIndex, key, cb)
       }
-
-      // If any nodes indicate that the entry has been deleted, then that also takes precedence over indices.
-      // TODO: Ensure that the logic here is correct.
-      if (deleted) return cb(null, null)
-
-      // If multiple nodes provide indices, then the smallest (most recent) one wins.
-      var nextIndex = nextIndices.reduce(function min (x, y) { return Math.min(x, y) })
-      return self._get(nextIndex, key, cb)
     })
   })
 }
@@ -263,7 +313,7 @@ UnionDB.prototype.put = function (key, value, cb) {
     // TODO: this operation should be transactional.
     this.db.put(dataPath, encoded, function (err) {
       if (err) return cb(err)
-      this._putIndex(key, self.layers.length - 1, false, function (err) {
+      this._putIndex(key, 0, false, function (err) {
         return cb(err)
       })
     })
@@ -299,7 +349,7 @@ UnionDB.prototype.delete = function (key, cb) {
   this.ready(function (err) {
     if (err) return cb(err)
 
-    this._putIndex(key, self.layers.length - 1, true, function (err) {
+    self._putIndex(key, 0, true, function (err) {
       return cb(err)
     })
   })

@@ -55,3 +55,27 @@ test('put/get with two layers', function (t) {
     })
   })
 })
+
+test('put/get with two layers and a deletion', function (t) {
+  t.plan(4)
+
+  create.fromLayers([
+    [
+     { type: 'put', key: 'a', value: 'hello' },
+     { type: 'put', key: 'b', value: 'goodbye' }
+    ],
+    [
+     { type: 'put', key: 'a', value: 'dog' },
+     { type: 'put', key: 'c', value: 'human' }
+    ]
+  ], function (err, db) {
+    t.error(err)
+    db.delete('a', function (err) {
+      t.error(err)
+      db.get('a', function (err, nodes) {
+        t.error(err)
+        t.same(nodes, null)
+      })
+    })
+  })
+})
