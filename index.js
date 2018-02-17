@@ -12,12 +12,12 @@ const DATA_PATH = '/DATA/'
 
 module.exports = UnionDB
 
-// This behavior is extracted towards the top so that it's super visible.
+// This behavior is extracted to the top so that it's super visible.
 function resolveEntryConflicts (entries) {
   var winningEntry = {
     deleted: false,
-    // Hopefully there are never more than 1e12 layers...
-    layerIndex: 1e12
+    // Hopefully there are never more than 1e9 layers...
+    layerIndex: 1e9
   }
   entries.forEach(function (entry) {
     if (entry.deleted) {
@@ -55,7 +55,7 @@ function UnionDB (factory, key, opts) {
   this.indexed = false
 
   // Set in open.
-  this.db = null
+  this._db = null
 
   this.ready = thunky(open)
 
@@ -67,8 +67,8 @@ function UnionDB (factory, key, opts) {
         var error = new Error('Cannot specify both a parent key and layers.')
         return cb(error)
       }
-      self.db = db
-      self.db.ready(function (err) {
+      self._db = db
+      self._db.ready(function (err) {
         if (err) return cb(err)
         if (self.key) return self._load(cb)
         self.key = db.key
@@ -81,9 +81,9 @@ function UnionDB (factory, key, opts) {
 UnionDB.prototype._getMetadata = function (cb) {
   var self = this
 
-  this.db.ready(function (err) {
+  this._db.ready(function (err) {
     if (err) return cb(err)
-    self.db.get(META_PATH, function (err, nodes) {
+    self._db.get(META_PATH, function (err, nodes) {
       if (err) return cb(err)
       if (nodes.length > 1) console.error('Conflict in metadata file -- using first node\'s value.')
       return cb(null, messages.Metadata.decode(nodes[0].value))
@@ -94,9 +94,9 @@ UnionDB.prototype._getMetadata = function (cb) {
 UnionDB.prototype._saveMetadata = function (cb) {
   var self = this
 
-  this.db.ready(function (err) {
+  this._db.ready(function (err) {
     if (err) return cb(err)
-    self.db.put(META_PATH, messages.Metadata.encode({
+    self._db.put(META_PATH, messages.Metadata.encode({
       parents: [self.parent],
       indexed: self.indexed
     }), function (err) {
@@ -175,10 +175,10 @@ UnionDB.prototype.mount = function (key, path, opts, cb) {
 UnionDB.prototype._get = function (idx, key, cb) {
   var self = this
 
-  if (!this.db) return cb(new Error('Attempting to get from an uninitialized database.'))
+  if (!this._db) return cb(new Error('Attempting to get from an uninitialized database.'))
   if (idx === 0) {
     console.log('GETTING:', p.join(DATA_PATH, key))
-    return this.db.get(p.join(DATA_PATH, key), function (err, nodes) {
+    return this._db.get(p.join(DATA_PATH, key), function (err, nodes) {
       if (err) return cb(err)
       if (self._codec) {
         console.log('theres a codec')
@@ -209,7 +209,7 @@ UnionDB.prototype._putIndex = function (key, idx, deleted, cb) {
   var index = this._makeIndex(key, idx, deleted)
 
   console.log('PUTTING VALUE AT:', indexPath)
-  this.db.put(indexPath, index, function (err) {
+  this._db.put(indexPath, index, function (err) {
     return cb(err)
   })
 }
@@ -217,7 +217,7 @@ UnionDB.prototype._putIndex = function (key, idx, deleted, cb) {
 UnionDB.prototype._putIndices = function (indices, cb) {
   var self = this
 
-  this.db.batch(Object.keys(indices).map(function (key) {
+  this._db.batch(Object.keys(indices).map(function (key) {
     var value = indices[key]
     return {
       type: 'put',
@@ -255,6 +255,7 @@ UnionDB.prototype._getIndex = function (cb) {
                 localIndex[pkey] = parentEntry
               }
             })
+            console.log('MERGED INDEX:', localIndex)
             return cb(null, localIndex)
           })
         })
@@ -264,7 +265,7 @@ UnionDB.prototype._getIndex = function (cb) {
 
   function getLocalIndex (cb) {
     var allEntries = {}
-    var diffStream = self.db.createDiffStream(INDEX_PATH)
+    var diffStream = self._db.createDiffStream(INDEX_PATH)
     diffStream.on('data', function (data) {
       if (data.type === 'put') {
         // We only care about the last put for each key in the layer.
@@ -291,7 +292,7 @@ UnionDB.prototype.get = function (key, cb) {
 
   this.ready(function (err) {
     if (err) return cb(err)
-    self.db.get(p.join(INDEX_PATH, key), function (err, nodes) {
+    self._db.get(p.join(INDEX_PATH, key), function (err, nodes) {
       if (err) return cb(err)
       console.log('getting key:', key, 'self.key:', self.key, 'self.parent is:', self.parent)
       if (!nodes && self.parent) {
@@ -329,7 +330,7 @@ UnionDB.prototype.put = function (key, value, cb) {
     console.log('ADDING VALUE TO:', p.join(DATA_PATH, key))
 
     // TODO: this operation should be transactional.
-    this.db.put(dataPath, encoded, function (err) {
+    this._db.put(dataPath, encoded, function (err) {
       if (err) return cb(err)
       this._putIndex(key, 0, false, function (err) {
         return cb(err)
@@ -357,7 +358,7 @@ UnionDB.prototype.batch = function (records, cb) {
     })
     var toBatch = records.concat(stats)
     console.log('in batch, toBatch:', toBatch)
-    return self.db.batch(toBatch, cb)
+    return self._db.batch(toBatch, cb)
   })
 }
 
@@ -414,7 +415,7 @@ UnionDB.prototype.share = function (dir, cb) {
 }
 
 UnionDB.prototype.authorize = function (key) {
-  return this.db.authorize(key)
+  return this._db.authorize(key)
 }
 
 UnionDB.prototype.version = function (cb) {
@@ -422,6 +423,6 @@ UnionDB.prototype.version = function (cb) {
 
   this.ready(function (err) {
     if (err) return cb(err)
-    return self.db.version(cb)
+    return self._db.version(cb)
   })
 }
