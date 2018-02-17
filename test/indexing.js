@@ -10,7 +10,6 @@ function verifyIndices (t, db, indicesByKey) {
       t.error(err)
       t.same(nodes.length, 1)
       var decoded = messages.Entry.decode(nodes[0].value)
-      console.log('key:', key, 'layerIndex:', decoded.layerIndex)
       t.same(decoded.layerIndex, indicesByKey[key])
     })
   })
@@ -21,7 +20,6 @@ function verifyValues (t, db, valuesByKey) {
     db.get(key, function (err, nodes) {
       t.error(err)
       t.same(nodes.length, 1)
-      console.log('IN HERE GOT KEY:', key, 'AND VALUE:', nodes[0].value)
       t.same(nodes[0].value, valuesByKey[key])
     })
   })

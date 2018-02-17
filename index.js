@@ -1,4 +1,6 @@
 var p = require('path')
+var inherits = require('inherits')
+var EventEmitter = require('events').EventEmitter
 
 var thunky = require('thunky')
 var codecs = require('codecs')
@@ -44,8 +46,6 @@ function UnionDB (factory, key, opts) {
   this.parent = this.opts.parent
   this.key = key
 
-  console.log('IN CONSTRUCTOR, key:', key)
-
   this._codec = (this.opts.valueEncoding) ? codecs(this.opts.valueEncoding) : null
   this._linkTrie = new Trie()
   this._factory = factory
@@ -77,6 +77,7 @@ function UnionDB (factory, key, opts) {
     })
   }
 }
+inherits(UnionDB, EventEmitter)
 
 UnionDB.prototype._getMetadata = function (cb) {
   var self = this
@@ -114,7 +115,6 @@ UnionDB.prototype._loadParent = function (cb) {
     valueEncoding: this.opts.valueEncoding
   }, function (err, db) {
     if (err) return cb(err)
-    console.log('after uniondb creation in _loadParent')
     self.parent.db = db
     return cb()
   }, function (err) {
@@ -152,7 +152,6 @@ UnionDB.prototype._save = function (cb) {
 }
 
 UnionDB.prototype._createUnionDB = function (key, opts, cb) {
-  console.log('in createUnionDB')
   return cb(null, new UnionDB(this._factory, key, opts))
 }
 
@@ -177,14 +176,11 @@ UnionDB.prototype._get = function (idx, key, cb) {
 
   if (!this._db) return cb(new Error('Attempting to get from an uninitialized database.'))
   if (idx === 0) {
-    console.log('GETTING:', p.join(DATA_PATH, key))
     return this._db.get(p.join(DATA_PATH, key), function (err, nodes) {
       if (err) return cb(err)
       if (self._codec) {
-        console.log('theres a codec')
         nodes.forEach(function (node) {
           node.value = self._codec.decode(node.value)
-          console.log('updated node value to:', node.value)
         })
       }
       return cb(null, nodes)
@@ -208,7 +204,6 @@ UnionDB.prototype._putIndex = function (key, idx, deleted, cb) {
 
   var index = this._makeIndex(key, idx, deleted)
 
-  console.log('PUTTING VALUE AT:', indexPath)
   this._db.put(indexPath, index, function (err) {
     return cb(err)
   })
@@ -255,7 +250,6 @@ UnionDB.prototype._getIndex = function (cb) {
                 localIndex[pkey] = parentEntry
               }
             })
-            console.log('MERGED INDEX:', localIndex)
             return cb(null, localIndex)
           })
         })
@@ -294,9 +288,7 @@ UnionDB.prototype.get = function (key, cb) {
     if (err) return cb(err)
     self._db.get(p.join(INDEX_PATH, key), function (err, nodes) {
       if (err) return cb(err)
-      console.log('getting key:', key, 'self.key:', self.key, 'self.parent is:', self.parent)
       if (!nodes && self.parent) {
-        console.log('LOOKING UP IN PARENT')
         return self.parent.db.get(key, cb)
       }
       if (!nodes) return cb(null, null)
@@ -305,6 +297,10 @@ UnionDB.prototype.get = function (key, cb) {
         return messages.Entry.decode(node.value)
       })
 
+      // If there are any conflicting entries, resolve them according to the the strategy above.
+      if (entries.length > 1) {
+        self.emit('conflict', key, entries)
+      }
       var resolvedEntry = resolveEntryConflicts(entries)
 
       if (resolvedEntry.deleted) {
@@ -327,7 +323,6 @@ UnionDB.prototype.put = function (key, value, cb) {
     var encoded = (self._codec) ? self._codec.encode(value) : value
 
     var dataPath = p.join(DATA_PATH, key)
-    console.log('ADDING VALUE TO:', p.join(DATA_PATH, key))
 
     // TODO: this operation should be transactional.
     this._db.put(dataPath, encoded, function (err) {
@@ -340,7 +335,6 @@ UnionDB.prototype.put = function (key, value, cb) {
 }
 
 UnionDB.prototype.batch = function (records, cb) {
-  console.log('in batch')
   var self = this
 
   this.ready(function (err) {
@@ -357,7 +351,6 @@ UnionDB.prototype.batch = function (records, cb) {
       return stat
     })
     var toBatch = records.concat(stats)
-    console.log('in batch, toBatch:', toBatch)
     return self._db.batch(toBatch, cb)
   })
 }

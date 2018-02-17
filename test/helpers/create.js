@@ -9,10 +9,8 @@ function factory (key, opts, cb) {
   opts = opts || {}
 
   if (key && dbs[key]) {
-    console.log('REUSING EXISTING DATABASE for key:', key)
     var db = dbs[key]
     if (opts.checkout) {
-      console.log('ITS A CHECKOUT')
       return cb(null, db.checkout(opts.checkout))
     }
     return cb(null, dbs[key])
@@ -54,7 +52,6 @@ function fromLayers (layerBatches, cb) {
   }
 
   function makeUnionDB (opts) {
-    console.log('in makeUnionDB, opts:', opts)
     var batch = layerBatches[currentIdx++]
     var db = uniondb(factory, null, opts)
     currentDb = db
