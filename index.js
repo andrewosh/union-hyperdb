@@ -19,10 +19,9 @@ function UnionDB (factory, key, opts) {
     return new UnionDB(factory, null, opts)
   }
   this.opts = opts || {}
-  this.layers = this.opts.layers
-  console.log('this.layers:', this.layers)
+  this.parent = this.opts.parent
 
-  this._codec = (opts.valueEncoding) ? codecs(opts.valueEncoding) : null
+  this._codec = (this.opts.valueEncoding) ? codecs(this.opts.valueEncoding) : null
   this._linkTrie = new Trie()
   this._factory = factory
   this._dbs = {}
@@ -39,9 +38,9 @@ function UnionDB (factory, key, opts) {
 
   var self = this
   function open (cb) {
-    self._createDatabase(self.key, null, function (err, db) {
+    self._factory(self.key, null, function (err, db) {
       if (err) return cb(err)
-      if (self.key && self.layers) {
+      if (self.key && self.parent) {
         var error = new Error('Cannot specify both a parent key and layers.')
         return cb(error)
       }
@@ -56,25 +55,14 @@ function UnionDB (factory, key, opts) {
   }
 }
 
-UnionDB.prototype._loadLayers = function (cb) {
+UnionDB.prototype._loadParent = function (cb) {
   var self = this
 
-  var createDb = this._createDatabase.bind(this)
-  map(this.layers, function (layer, next) {
-    if (layer instanceof Array) return map(layer, createDb, next)
-    createDb(layer.key, { checkout: layer.version }, function (err, db) {
-      if (err) return next(err)
-      layer.db = db
-      return next(null, layer)
-    })
-  }, function (err) {
+  this._createUnionDB(this.parent.key, { checkout: this.parent.version }, function (err, db) {
     if (err) return cb(err)
-    self.layers.push({
-      key: self.key,
-      version: self.opts.version,
-      db: self.db
-    })
-    return cb()
+    self.parent.db = db
+  }, function (err) {
+    return cb(err)
   })
 }
 
@@ -85,9 +73,10 @@ UnionDB.prototype._load = function (cb) {
     if (err) return cb(err)
     if (nodes.length > 1) return cb(new Error('Read conflict in metadata file.'))
     var metadata = messages.Metadata.decode(nodes[0].value)
-    self.layers = metadata.layers
-    self.indexed = metadata.indexed
-    return self._loadLayers(cb)
+    // TODO: handle the case of multipe parents? (i.e. a merge)
+    self.parent = metadata.parents[0]
+    if (self.parent) return self._loadParent(cb)
+    return cb()
   })
 }
 
@@ -95,23 +84,23 @@ UnionDB.prototype._save = function (cb) {
   var self = this
 
   this.db.put(META_PATH, messages.Metadata.encode({
-    layers: this.layers,
-    indexed: this.indexed
+    parents: [this.parent]
   }), function (err) {
     if (err) return cb(err)
-    return self._loadLayers(cb)
+    if (self.parent) return self._loadParent(cb)
+    return cb()
   })
 }
 
-UnionDB.prototype._createDatabase = function (key, opts, cb) {
+UnionDB.prototype._createUnionDB = function (key, opts, cb) {
   var self = this
 
-  console.log('in createDatabase')
+  console.log('in createUnionDB')
   this._factory(key, opts, function (err, db) {
     console.log('after factory call')
     if (err) return cb(err)
     self._dbs[key] = db
-    return cb(null, db)
+    return cb(null, new UnionDB(self._factory, db.key, opts))
   })
 }
 
@@ -123,7 +112,7 @@ UnionDB.prototype.mount = function (key, path, opts, cb) {
 
   this._saveLink(key, path, opts, function (err) {
     if (err) return cb(err)
-    self._createDatabase(key, opts, function (err, db) {
+    self._createUnionDB(key, opts, function (err, db) {
       if (err) return cb(err)
       self._dbs[key] = db
       self.linkTrie.add(path, db)
@@ -135,58 +124,23 @@ UnionDB.prototype.mount = function (key, path, opts, cb) {
 UnionDB.prototype._get = function (idx, key, cb) {
   var self = this
 
-  var layer = this.layers[idx]
-  if (!layer.db) return cb(new Error('Attempting to get from an uninitialized database.'))
-  layer.db.get(p.join(INDEX_PATH, key), function (err, nodes) {
-    console.log('got', p.join(INDEX_PATH, key), 'and nodes:', nodes)
-    if (err) return cb(err)
-
-    // Base case.
-    if (!nodes && idx === 0) return cb(null, null)
-
-    // Key is not indexed in the current layer. Proceed to next layer.
-    if (!nodes) return self._get(idx - 1, key, cb)
-
-    var existingNodes = []
-    var nextIndices = []
-    var deleted = false
-
-    nodes.forEach(function (node) {
-      var entry = messages.Entry.decode(node.value)
-      if (entry.deleted) {
-        deleted = true
-      } else if (entry.layerIndex === idx) {
-        existingNodes.push(entry.layerIndex)
-      } else {
-        nextIndices.push(entry.layerIndex)
-      }
-    })
-
-    // If any nodes directly provide values, then stop the recursion and return those values.
-    // Nodes that provide index references to other layers will be ignored -- values take precedence.
-    if (existingNodes.length > 0) {
-      map(existingNodes, function (node, next) {
-        layer.db.get(p.join(DATA_PATH, node.key.slice(INDEX_PATH.length)), function (err, node) {
-          if (err) return next(err)
-          if (self._codec) node.value = self._codec.decode(node.value)
-          return node
+  if (!this.db) return cb(new Error('Attempting to get from an uninitialized database.'))
+  if (idx === 0) {
+    console.log('GETTING:', p.join(DATA_PATH, key))
+    return this.db.get(p.join(DATA_PATH, key), function (err, nodes) {
+      console.log('GETTING GOT:', nodes)
+      if (err) return cb(err)
+      if (self._codec) {
+        console.log('theres a codec')
+        nodes.forEach(function (node) {
+          node.value = self._codec.decode(node.value)
+          console.log('updated node value to:', node.value)
         })
-      }, function (err, nodes) {
-        if (err) return cb(err)
-        return cb(null, nodes)
-      })
-    }
-
-    // If any nodes indicate that the entry has been deleted, then that also takes precedence over indices.
-    // TODO: Ensure that the logic here is correct.
-    if (deleted) return cb(null, null)
-
-    // If multiple nodes provide indices, then the largest (most recent) one wins.
-    // The next index must always be smaller than the current.
-    var nextIndex = nextIndices.reduce(function max (x, y) { return Math.max(x, y) })
-    if (nextIndex >= idx) return cb(new Error('Invalid index: Value must be smaller than current index.'))
-    return self._get(nextIndex, key, cb)
-  })
+      }
+      return cb(null, nodes)
+    })
+  }
+  return this.parent._get(idx - 1, key, cb)
 }
 
 UnionDB.prototype._makeIndex = function (key, idx, deleted) {
@@ -247,9 +201,51 @@ UnionDB.prototype._listLayerStats = function (layer, cb) {
 UnionDB.prototype.get = function (key, cb) {
   var self = this
 
+  var existingNodes = []
+  var nextIndices = []
+  var deleted = false
+
   this.ready(function (err) {
     if (err) return cb(err)
-    return self._get(self.layers.length - 1, key, cb)
+    self.db.get(p.join(INDEX_PATH, key), function (err, nodes) {
+      if (err) return cb(err)
+      if (!nodes && this.parent) return this.parent.get(key, cb)
+      if (!nodes) return cb(null, null)
+
+      nodes.forEach(function (node) {
+        var entry = messages.Entry.decode(node.value)
+        console.log('entry:', entry)
+        if (entry.deleted) {
+          deleted = true
+        } else if (entry.layerIndex === 0) {
+          existingNodes.push(entry.layerIndex)
+        } else {
+          nextIndices.push(entry.layerIndex)
+        }
+      })
+
+      // If any nodes directly provide values, then stop the recursion and return those values.
+      // Nodes that provide index references to other layers will be ignored -- values take precedence.
+      if (existingNodes.length > 0) {
+        return map(existingNodes, function (node, next) {
+          console.log('doing a _get for key:', key)
+          return self._get(0, key, next)
+        }, function (err, nodes) {
+          nodes = nodes.reduce(function (l, n) { return l.concat(n) })
+          console.log('AFTER _GET, NODES:', nodes)
+          if (err) return cb(err)
+          return cb(null, nodes)
+        })
+      }
+
+      // If any nodes indicate that the entry has been deleted, then that also takes precedence over indices.
+      // TODO: Ensure that the logic here is correct.
+      if (deleted) return cb(null, null)
+
+      // If multiple nodes provide indices, then the smallest (most recent) one wins.
+      var nextIndex = nextIndices.reduce(function min (x, y) { return Math.min(x, y) })
+      return self._get(nextIndex, key, cb)
+    })
   })
 }
 
@@ -278,8 +274,6 @@ UnionDB.prototype.batch = function (records, cb) {
   console.log('in batch')
   var self = this
 
-  var idx = self.layers.length - 1
-
   this.ready(function (err) {
     if (err) return cb(err)
     // Warning: records is mutated in this map to save an iteration.
@@ -290,7 +284,7 @@ UnionDB.prototype.batch = function (records, cb) {
         value: (self._codec) ? self._codec.encode(record.value) : record.value
       }
       record.key = p.join(INDEX_PATH, record.key)
-      record.value = self._makeIndex(record.key, idx, false)
+      record.value = self._makeIndex(record.key, 0, false)
       return stat
     })
     var toBatch = records.concat(stats)
@@ -385,4 +379,11 @@ UnionDB.prototype.share = function (dir, cb) {
 
 UnionDB.prototype.authorize = function (key) {
   return this.db.authorize(key)
+}
+
+UnionDB.prototype.version = function (cb) {
+  this.ready(function (err) {
+    if (err) return cb(err)
+    return this.db.version(cb)
+  })
 }

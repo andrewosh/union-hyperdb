@@ -2,7 +2,7 @@ var test = require('tape')
 var create = require('./helpers/create')
 
 test('put/get with a single layer', function (t) {
-  t.plan(6)
+  t.plan(7)
 
   create.fromLayers([
     [
@@ -15,7 +15,7 @@ test('put/get with a single layer', function (t) {
       t.error(err)
       t.same(nodes.length, 1)
       t.same(nodes[0].value, 'hello')
-      db.get('b', function (err, value) {
+      db.get('b', function (err, nodes) {
         t.error(err)
         t.same(nodes.length, 1)
         t.same(nodes[0].value, 'goodbye')

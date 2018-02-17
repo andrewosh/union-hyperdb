@@ -1,6 +1,6 @@
 var hyperdb = require('hyperdb')
 var ram = require('random-access-memory')
-var map = require('async-each')
+var each = require('async-each')
 
 var uniondb = require('../..')
 
@@ -18,31 +18,34 @@ function factory (key, opts, cb) {
 }
 
 function fromLayers (layerBatches, cb) {
-  map(layerBatches, function (batch, next) {
-    factory(null, { valueEncoding: 'json' }, function (err, db) {
-      if (err) return next(err)
-      db.batch(batch, function (err) {
+  var currentDb = null
+
+  each(layerBatches, function (batch, next) {
+    if (currentDb) {
+      currentDb.version(function (err, version) {
         if (err) return next(err)
-        db.version(function (err, version) {
-          if (err) return next(err)
-          return next(null, {
-            key: db.key,
+        return makeNextLayer({
+          parent: {
+            key: currentDb.key,
             version: version
-          })
+          },
+          valueEncoding: 'json'
         })
       })
-    })
-  }, function (err, layers) {
+    } else {
+      return makeNextLayer({
+        valueEncoding: 'json'
+      })
+    }
+
+    function makeNextLayer (opts) {
+      var db = uniondb(factory, null, opts)
+      currentDb = db
+      db.batch(batch, next)
+    }
+  }, function (err) {
     if (err) return cb(err)
-    console.log('layers:', layers)
-    var db = uniondb(factory, null, {
-      valueEncoding: 'json',
-      layers: layers
-    })
-    db.ready(function (err) {
-      if (err) return cb(err)
-      return cb(null, db)
-    })
+    return cb(null, currentDb)
   })
 }
 
