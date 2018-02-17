@@ -5,7 +5,6 @@
   "main": "index.js",
   "dependencies": {
     "async-each": "^1.0.1",
-    "async-reduce": "0.0.1",
     "codecs": "^1.2.0",
     "protocol-buffers": "^4.0.2",
     "thunky": "^1.0.2"

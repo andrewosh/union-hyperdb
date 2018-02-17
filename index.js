@@ -2,7 +2,6 @@ var p = require('path')
 
 var thunky = require('thunky')
 var codecs = require('codecs')
-var reduce = require('async-reduce')
 
 var Trie = require('./lib/trie')
 var messages = require('./lib/messages')
@@ -191,7 +190,7 @@ UnionDB.prototype._get = function (idx, key, cb) {
       return cb(null, nodes)
     })
   }
-  return this.parent._get(idx - 1, key, cb)
+  return this.parent.db._get(idx - 1, key, cb)
 }
 
 UnionDB.prototype._makeIndex = function (key, idx, deleted) {
@@ -223,7 +222,7 @@ UnionDB.prototype._putIndices = function (indices, cb) {
     return {
       type: 'put',
       key: key,
-      value: self._makeIndex(key, value.idx, value.deleted)
+      value: self._makeIndex(key, value.layerIndex, value.deleted)
     }
   }), function (err) {
     return cb(err)
@@ -231,44 +230,46 @@ UnionDB.prototype._putIndices = function (indices, cb) {
 }
 
 UnionDB.prototype._getIndex = function (cb) {
-  if (!this.db) return cb(new Error('Attempting to list from an uninitialized database.'))
   var self = this
 
-  this._isIndexed(function (err, indexed) {
+  this.ready(function (err) {
     if (err) return cb(err)
-    if (indexed || !self.parent) {
-      // If already indexed, or there's no parent, just spit out the contents of the INDEX subtree.
-      getLocalIndex(function (err, localIndex) {
-        if (err) return cb(err)
-        return cb(null, localIndex)
-      })
-    } else {
-      // Otherwise, recursively get the index of the parent and merge with our INDEX subtree.
-      self.parent._getIndex(function (err, parentIndex) {
-        if (err) return cb(err)
+    self._isIndexed(function (err, indexed) {
+      if (err) return cb(err)
+      if (indexed || !self.parent) {
+        // If already indexed, or there's no parent, just spit out the contents of the INDEX subtree.
         getLocalIndex(function (err, localIndex) {
           if (err) return cb(err)
-          Object.keys(parentIndex).forEach(function (pkey) {
-            if (!localIndex[pkey]) {
-              var parentEntry = parentIndex[pkey]
-              parentEntry.layerIndex++
-              localIndex[pkey] = parentEntry
-            }
-          })
           return cb(null, localIndex)
         })
-      })
-    }
+      } else {
+        // Otherwise, recursively get the index of the parent and merge with our INDEX subtree.
+        self.parent.db._getIndex(function (err, parentIndex) {
+          if (err) return cb(err)
+          getLocalIndex(function (err, localIndex) {
+            if (err) return cb(err)
+            Object.keys(parentIndex).forEach(function (pkey) {
+              if (!localIndex[pkey]) {
+                var parentEntry = parentIndex[pkey]
+                parentEntry.layerIndex++
+                localIndex[pkey] = parentEntry
+              }
+            })
+            return cb(null, localIndex)
+          })
+        })
+      }
+    })
   })
 
   function getLocalIndex (cb) {
     var allEntries = {}
-    var diffStream = this.db.createDiffStream(INDEX_PATH)
+    var diffStream = self.db.createDiffStream(INDEX_PATH)
     diffStream.on('data', function (data) {
       if (data.type === 'put') {
         // We only care about the last put for each key in the layer.
         allEntries[data.name] = data.nodes.map(function (node) {
-          return messages.Entry.decode(node)
+          return messages.Entry.decode(node.value)
         })
       }
     })
@@ -387,7 +388,7 @@ UnionDB.prototype.index = function (opts, cb) {
   opts = opts || {}
   var self = this
 
-  this.getIndex(function (err, index) {
+  this._getIndex(function (err, index) {
     if (err) return cb(err)
     writeIndex(index)
   })
