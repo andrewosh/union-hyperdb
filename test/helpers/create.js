@@ -1,15 +1,24 @@
 var hyperdb = require('hyperdb')
 var ram = require('random-access-memory')
-var each = require('async-each')
 
 var uniondb = require('../..')
 
 var dbs = {}
 function factory (key, opts, cb) {
   if (typeof opts === 'function') return factory(key, null, opts)
-  if (key && dbs[key]) return cb(null, dbs[key])
+  opts = opts || {}
 
-  var db = hyperdb(ram, key, opts)
+  if (key && dbs[key]) {
+    console.log('REUSING EXISTING DATABASE for key:', key)
+    var db = dbs[key]
+    if (opts.checkout) {
+      console.log('ITS A CHECKOUT')
+      return cb(null, db.checkout(opts.checkout))
+    }
+    return cb(null, dbs[key])
+  }
+
+  db = hyperdb(ram, key, opts)
   db.ready(function (err) {
     if (err) return cb(err)
     dbs[db.key] = db
@@ -19,12 +28,17 @@ function factory (key, opts, cb) {
 
 function fromLayers (layerBatches, cb) {
   var currentDb = null
+  var currentIdx = 0
 
-  each(layerBatches, function (batch, next) {
+  makeNextLayer()
+
+  function makeNextLayer (err) {
+    if (err) return cb(err)
+
     if (currentDb) {
       currentDb.version(function (err, version) {
-        if (err) return next(err)
-        return makeNextLayer({
+        if (err) return cb(err)
+        return makeUnionDB({
           parent: {
             key: currentDb.key,
             version: version
@@ -33,20 +47,23 @@ function fromLayers (layerBatches, cb) {
         })
       })
     } else {
-      return makeNextLayer({
+      return makeUnionDB({
         valueEncoding: 'json'
       })
     }
+  }
 
-    function makeNextLayer (opts) {
-      var db = uniondb(factory, null, opts)
-      currentDb = db
-      db.batch(batch, next)
-    }
-  }, function (err) {
-    if (err) return cb(err)
-    return cb(null, currentDb)
-  })
+  function makeUnionDB (opts) {
+    console.log('in makeUnionDB, opts:', opts)
+    var batch = layerBatches[currentIdx++]
+    var db = uniondb(factory, null, opts)
+    currentDb = db
+    db.batch(batch, function (err) {
+      if (err) return cb(err)
+      if (currentIdx === layerBatches.length) return cb(null, currentDb)
+      return makeNextLayer()
+    })
+  }
 }
 
 module.exports = {

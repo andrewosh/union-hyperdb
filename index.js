@@ -20,11 +20,13 @@ function UnionDB (factory, key, opts) {
   }
   this.opts = opts || {}
   this.parent = this.opts.parent
+  this.key = key
+
+  console.log('IN CONSTRUCTOR, key:', key)
 
   this._codec = (this.opts.valueEncoding) ? codecs(this.opts.valueEncoding) : null
   this._linkTrie = new Trie()
   this._factory = factory
-  this._dbs = {}
 
   // Indexing the layers will record which layer last modified each entry (for faster lookups).
   // If a UnionDB is not indexed, each `get` will have to traverse the list of layers.
@@ -32,7 +34,6 @@ function UnionDB (factory, key, opts) {
 
   // Set in open.
   this.db = null
-  this.key = null
 
   this.ready = thunky(open)
 
@@ -58,9 +59,14 @@ function UnionDB (factory, key, opts) {
 UnionDB.prototype._loadParent = function (cb) {
   var self = this
 
-  this._createUnionDB(this.parent.key, { checkout: this.parent.version }, function (err, db) {
+  this._createUnionDB(this.parent.key, {
+    checkout: this.parent.version,
+    valueEncoding: this.opts.valueEncoding
+  }, function (err, db) {
     if (err) return cb(err)
+    console.log('after uniondb creation in _loadParent')
     self.parent.db = db
+    return cb()
   }, function (err) {
     return cb(err)
   })
@@ -93,15 +99,8 @@ UnionDB.prototype._save = function (cb) {
 }
 
 UnionDB.prototype._createUnionDB = function (key, opts, cb) {
-  var self = this
-
   console.log('in createUnionDB')
-  this._factory(key, opts, function (err, db) {
-    console.log('after factory call')
-    if (err) return cb(err)
-    self._dbs[key] = db
-    return cb(null, new UnionDB(self._factory, db.key, opts))
-  })
+  return cb(null, new UnionDB(this._factory, key, opts))
 }
 
 /**
@@ -114,7 +113,6 @@ UnionDB.prototype.mount = function (key, path, opts, cb) {
     if (err) return cb(err)
     self._createUnionDB(key, opts, function (err, db) {
       if (err) return cb(err)
-      self._dbs[key] = db
       self.linkTrie.add(path, db)
       return cb(null, db)
     })
@@ -128,7 +126,6 @@ UnionDB.prototype._get = function (idx, key, cb) {
   if (idx === 0) {
     console.log('GETTING:', p.join(DATA_PATH, key))
     return this.db.get(p.join(DATA_PATH, key), function (err, nodes) {
-      console.log('GETTING GOT:', nodes)
       if (err) return cb(err)
       if (self._codec) {
         console.log('theres a codec')
@@ -209,7 +206,11 @@ UnionDB.prototype.get = function (key, cb) {
     if (err) return cb(err)
     self.db.get(p.join(INDEX_PATH, key), function (err, nodes) {
       if (err) return cb(err)
-      if (!nodes && this.parent) return this.parent.get(key, cb)
+      console.log('getting key:', key, 'self.key:', self.key, 'self.parent is:', self.parent)
+      if (!nodes && self.parent) {
+        console.log('LOOKING UP IN PARENT')
+        return self.parent.db.get(key, cb)
+      }
       if (!nodes) return cb(null, null)
 
       nodes.forEach(function (node) {
@@ -232,7 +233,6 @@ UnionDB.prototype.get = function (key, cb) {
           return self._get(0, key, next)
         }, function (err, nodes) {
           nodes = nodes.reduce(function (l, n) { return l.concat(n) })
-          console.log('AFTER _GET, NODES:', nodes)
           if (err) return cb(err)
           return cb(null, nodes)
         })
@@ -382,8 +382,10 @@ UnionDB.prototype.authorize = function (key) {
 }
 
 UnionDB.prototype.version = function (cb) {
+  var self = this
+
   this.ready(function (err) {
     if (err) return cb(err)
-    return this.db.version(cb)
+    return self.db.version(cb)
   })
 }

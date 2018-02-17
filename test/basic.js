@@ -54,5 +54,4 @@ test('put/get with two layers', function (t) {
       })
     })
   })
-
 })
