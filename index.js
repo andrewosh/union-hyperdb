@@ -1,7 +1,8 @@
 var p = require('path')
-var inherits = require('inherits')
 var EventEmitter = require('events').EventEmitter
 
+var inherits = require('inherits')
+var bulk = require('bulk-write-stream')
 var thunky = require('thunky')
 var codecs = require('codecs')
 
@@ -155,22 +156,6 @@ UnionDB.prototype._createUnionDB = function (key, opts, cb) {
   return cb(null, new UnionDB(this._factory, key, opts))
 }
 
-/**
- * TODO: Linking is still WIP.
- */
-UnionDB.prototype.mount = function (key, path, opts, cb) {
-  var self = this
-
-  this._saveLink(key, path, opts, function (err) {
-    if (err) return cb(err)
-    self._createUnionDB(key, opts, function (err, db) {
-      if (err) return cb(err)
-      self.linkTrie.add(path, db)
-      return cb(null, db)
-    })
-  })
-}
-
 UnionDB.prototype._get = function (idx, key, cb) {
   var self = this
 
@@ -281,6 +266,22 @@ UnionDB.prototype._getIndex = function (cb) {
 
 // BEGIN Public API
 
+/**
+ * TODO: Linking is still WIP.
+ */
+UnionDB.prototype.mount = function (key, path, opts, cb) {
+  var self = this
+
+  this._saveLink(key, path, opts, function (err) {
+    if (err) return cb(err)
+    self._createUnionDB(key, opts, function (err, db) {
+      if (err) return cb(err)
+      self.linkTrie.add(path, db)
+      return cb(null, db)
+    })
+  })
+}
+
 UnionDB.prototype.get = function (key, cb) {
   var self = this
 
@@ -325,9 +326,9 @@ UnionDB.prototype.put = function (key, value, cb) {
     var dataPath = p.join(DATA_PATH, key)
 
     // TODO: this operation should be transactional.
-    this._db.put(dataPath, encoded, function (err) {
+    self._db.put(dataPath, encoded, function (err) {
       if (err) return cb(err)
-      this._putIndex(key, 0, false, function (err) {
+      self._putIndex(key, 0, false, function (err) {
         return cb(err)
       })
     })
@@ -353,6 +354,15 @@ UnionDB.prototype.batch = function (records, cb) {
     var toBatch = records.concat(stats)
     return self._db.batch(toBatch, cb)
   })
+}
+
+UnionDB.prototype.createWriteStream = function () {
+  var self = this
+  return bulk.obj(write)
+
+  function write (batch, cb) {
+    self.batch(batch, cb)
+  }
 }
 
 UnionDB.prototype.delete = function (key, cb) {
@@ -399,6 +409,69 @@ UnionDB.prototype.index = function (opts, cb) {
   }
 }
 
+UnionDB.prototype._findEntries = function (dir, cb) {
+  var self = this
+
+  var prefix = p.join(INDEX_PATH, dir)
+  var entries = {}
+
+  this.ready(function (err) {
+    if (err) return cb(err)
+
+    var stream = self._db.createDiffStream(prefix)
+
+    stream.on('data', function (data) {
+      if (data.type === 'put') {
+        var newEntries = data.nodes.map(function (node) {
+          return messages.Entry.decode(node.value)
+        })
+        entries[data.name] = resolveEntryConflicts(newEntries)
+      }
+    })
+    stream.on('end', function () {
+      return cb(null, entries)
+    })
+    stream.on('error', function (err) {
+      return cb(err)
+    })
+  })
+}
+
+UnionDB.prototype.list = function (dir, cb) {
+  var self = this
+
+  var prefix = p.join(INDEX_PATH, dir)
+
+  this.ready(function (err) {
+    if (err) return cb(err)
+    self._isIndexed(function (err, indexed) {
+      if (err) return cb(err)
+      if (!indexed && self.parent) {
+        return self.parent.db._findEntries(dir, function (err, parentEntries) {
+          if (err) return cb(err)
+          self._findEntries(dir, function (err, entries) {
+            if (err) return cb(err)
+            Object.assign(parentEntries, entries)
+            return processEntries(null, parentEntries)
+          })
+        })
+      }
+      return self._findEntries(dir, processEntries)
+    })
+  })
+
+  function processEntries (err, entries) {
+    if (err) return cb(err)
+    var list = []
+    for (var name in entries) {
+      if (!entries[name].deleted) {
+        list.push(name.slice(prefix.length))
+      }
+    }
+    return cb(null, list)
+  }
+}
+
 UnionDB.prototype.replicate = function (opts) {
 
 }
@@ -418,4 +491,8 @@ UnionDB.prototype.version = function (cb) {
     if (err) return cb(err)
     return self._db.version(cb)
   })
+}
+
+UnionDB.prototype.watch = function (key, onwatch) {
+  return this._db.watch(key, onwatch)
 }

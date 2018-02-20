@@ -64,5 +64,6 @@ function fromLayers (layerBatches, cb) {
 }
 
 module.exports = {
-  fromLayers: fromLayers
+  fromLayers: fromLayers,
+  factory: factory
 }
