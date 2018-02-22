@@ -1,6 +1,9 @@
 var p = require('path')
 var EventEmitter = require('events').EventEmitter
 
+var duplexify = require('duplexify')
+// var multiplex = require('multiplex')
+// var pump = require('pump')
 var inherits = require('inherits')
 var bulk = require('bulk-write-stream')
 var thunky = require('thunky')
@@ -87,6 +90,7 @@ UnionDB.prototype._getMetadata = function (cb) {
     if (err) return cb(err)
     self._db.get(META_PATH, function (err, nodes) {
       if (err) return cb(err)
+      if (!nodes) return cb(null, null)
       if (nodes.length > 1) console.error('Conflict in metadata file -- using first node\'s value.')
       return cb(null, messages.Metadata.decode(nodes[0].value))
     })
@@ -135,6 +139,7 @@ UnionDB.prototype._load = function (cb) {
 
   this._getMetadata(function (err, metadata) {
     if (err) return cb(err)
+    if (!metadata) return cb()
     // TODO: handle the case of multiple parents? (i.e. a merge)
     self.parent = metadata.parents[0]
     if (self.parent) return self._loadParent(cb)
@@ -282,7 +287,9 @@ UnionDB.prototype.mount = function (key, path, opts, cb) {
   })
 }
 
-UnionDB.prototype.get = function (key, cb) {
+UnionDB.prototype.get = function (key, opts, cb) {
+  if (typeof opts === 'function') return this.get(key, {}, opts)
+
   var self = this
 
   this.ready(function (err) {
@@ -473,7 +480,44 @@ UnionDB.prototype.list = function (dir, cb) {
 }
 
 UnionDB.prototype.replicate = function (opts) {
+  var self = this
 
+  var proxy = duplexify()
+
+  this.ready(function (err) {
+    if (err) proxy.destroy(err)
+    var stream = self._db.replicate(opts)
+    proxy.setReadable(stream)
+    proxy.setWritable(stream)
+  })
+
+    /*
+  this.ready(function (err) {
+    if (err) proxy.destroy(err)
+
+    var parentStream = (self.parent) ? self.parent.db.replicate(opts) : null
+    var myStream = self._db.replicate(opts)
+    var stream = null
+
+    if (parentStream) {
+      stream = multiplex()
+      var s1 = stream.createStream()
+      var s2 = stream.createStream()
+      pump(parentStream, s1, parentStream, function (err) {
+        if (err) proxy.destroy(err)
+      })
+      pump(myStream, s2, myStream, function (err) {
+        if (err) proxy.destroy(err)
+      })
+    } else {
+      stream = myStream
+    }
+    proxy.setReadable(stream)
+    proxy.setWritable(stream)
+  })
+  */
+
+  return proxy
 }
 
 UnionDB.prototype.share = function (dir, cb) {
