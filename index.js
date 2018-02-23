@@ -50,6 +50,8 @@ function UnionDB (factory, key, opts) {
   this.parent = this.opts.parent
   this.key = key
 
+  this.localKey = null
+
   this._codec = (this.opts.valueEncoding) ? codecs(this.opts.valueEncoding) : null
   this._linkTrie = new Trie()
   this._factory = factory
@@ -74,6 +76,7 @@ function UnionDB (factory, key, opts) {
       self._db = db
       self._db.ready(function (err) {
         if (err) return cb(err)
+        self.localKey = self._db.local.key
         if (self.key) return self._load(cb)
         self.key = db.key
         return self._save(cb)
@@ -168,6 +171,7 @@ UnionDB.prototype._get = function (idx, key, cb) {
   if (idx === 0) {
     return this._db.get(p.join(DATA_PATH, key), function (err, nodes) {
       if (err) return cb(err)
+      if (!nodes) return cb(null, null)
       if (self._codec) {
         nodes.forEach(function (node) {
           node.value = self._codec.decode(node.value)
@@ -479,6 +483,15 @@ UnionDB.prototype.list = function (dir, cb) {
   }
 }
 
+UnionDB.prototype.watch = function (key, onchange) {
+  return this._db.watch(p.join(DATA_PATH, key), function change (nodes) {
+    return onchange(nodes.map(function (node) {
+      node.key = node.key.slice(DATA_PATH.length)
+      return node
+    }))
+  })
+}
+
 UnionDB.prototype.replicate = function (opts) {
   var self = this
 
@@ -535,8 +548,4 @@ UnionDB.prototype.version = function (cb) {
     if (err) return cb(err)
     return self._db.version(cb)
   })
-}
-
-UnionDB.prototype.watch = function (key, onwatch) {
-  return this._db.watch(key, onwatch)
 }

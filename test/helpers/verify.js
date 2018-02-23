@@ -21,6 +21,7 @@ function verifyValues (t, db, valuesByKey) {
     db.get(key, function (err, nodes) {
       t.error(err)
       t.same(nodes.length, 1)
+      console.log('OH THE VALUE IS:', nodes[0].value)
       t.same(nodes[0].value, valuesByKey[key])
     })
   })

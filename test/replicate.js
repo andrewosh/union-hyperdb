@@ -4,7 +4,7 @@ var replicate = require('./helpers/replicate')
 var create = require('./helpers/create')
 var verify = require('./helpers/verify')
 
-test('blah', function (t) {
+test('should replicate without any layers', function (t) {
   t.plan(5 + 3 * 1)
 
   create.two(function (err, db1, db2) {
