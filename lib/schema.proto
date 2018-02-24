@@ -1,19 +1,29 @@
 message DB {
   required bytes key = 1;
+  optional bytes version = 2;
+}
+
+message StaticDB {
+  required bytes key = 1;
   required bytes version = 2;
 }
 
 message Metadata {
-  repeated DB parents = 1;
+  repeated StaticDB parents = 1;
   required bool indexed = 2;
 }
 
 message Link {
   required DB db = 1;
-  required string path = 2;
+  required string localPath = 2;
+  optional string remotePath = 3;
 }
 
 message Entry {
   required bool deleted = 1;
   required uint32 layerIndex = 2;
+}
+
+message Version  {
+  repeated bytes versions = 1;
 }

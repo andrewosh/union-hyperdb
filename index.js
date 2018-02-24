@@ -2,6 +2,8 @@ var p = require('path')
 var EventEmitter = require('events').EventEmitter
 
 var duplexify = require('duplexify')
+var map = require('async-each')
+var each = map
 // var multiplex = require('multiplex')
 // var pump = require('pump')
 var inherits = require('inherits')
@@ -15,6 +17,7 @@ var messages = require('./lib/messages')
 const META_PATH = '/META/'
 const INDEX_PATH = '/INDEX/'
 const DATA_PATH = '/DATA/'
+const LINKS_PATH = '/LINKS'
 
 module.exports = UnionDB
 
@@ -53,6 +56,7 @@ function UnionDB (factory, key, opts) {
   this.localKey = null
 
   this._codec = (this.opts.valueEncoding) ? codecs(this.opts.valueEncoding) : null
+  this._links = {}
   this._linkTrie = new Trie()
   this._factory = factory
 
@@ -76,9 +80,16 @@ function UnionDB (factory, key, opts) {
       self._db = db
       self._db.ready(function (err) {
         if (err) return cb(err)
+
         self.localKey = self._db.local.key
         if (self.key) return self._load(cb)
         self.key = db.key
+
+        self._db.watch(LINKS_PATH, function () {
+          // Refresh the links whenver any change.
+          return self._loadLinks()
+        })
+
         return self._save(cb)
       })
     })
@@ -115,25 +126,64 @@ UnionDB.prototype._saveMetadata = function (cb) {
   })
 }
 
-UnionDB.prototype._loadParent = function (cb) {
-  var self = this
-
-  this._createUnionDB(this.parent.key, {
-    checkout: this.parent.version,
+UnionDB.prototype._loadDatabase = function (record, cb) {
+  var dbMetadata = (record.db) ? record.db : record
+  this._createUnionDB(dbMetadata.key, {
+    checkout: dbMetadata.version,
     valueEncoding: this.opts.valueEncoding
   }, function (err, db) {
     if (err) return cb(err)
-    self.parent.db = db
+    record.db = db
     return cb()
   }, function (err) {
     return cb(err)
   })
 }
 
+UnionDB.prototype._loadParent = function (cb) {
+  if (this.parent) {
+    return this._loadDatabase(this.parent, cb)
+  }
+  return cb()
+}
+
 UnionDB.prototype._isIndexed = function (cb) {
   this._getMetadata(function (err, metadata) {
     if (err) return cb(err)
     return cb(null, metadata.indexed)
+  })
+}
+
+UnionDB.prototype._loadLinks = function (cb) {
+  var self = this
+  console.log('LOADING LINKS')
+  this._list(LINKS_PATH, function (err, linkNames) {
+    if (err) return cb(err)
+
+    console.log('linkNames:', linkNames)
+    each(linkNames, function (name, next) {
+      self._db.get(p.join(LINKS_PATH, name), function (err, encoded) {
+        if (err) return cb(err)
+
+        var linkRecord = messages.Link.decode(encoded)
+        var linkId = messages.Version.encode({
+          versions: [messages.DB.encode(linkRecord.db)]
+        })
+
+        self._linkTrie.add(linkRecord.localPath, linkRecord)
+        if (self._links[linkId]) return next()
+
+        self._loadDatabase(linkRecord, function (err) {
+          if (err) return cb(err)
+          self._links[linkId] = linkRecord
+          return next()
+        })
+      })
+    }, function (err) {
+      console.log('DONE')
+      if (!cb && err) throw err
+      if (cb) return cb(err)
+    })
   })
 }
 
@@ -145,8 +195,10 @@ UnionDB.prototype._load = function (cb) {
     if (!metadata) return cb()
     // TODO: handle the case of multiple parents? (i.e. a merge)
     self.parent = metadata.parents[0]
-    if (self.parent) return self._loadParent(cb)
-    return cb()
+    self._loadParent(function (err) {
+      if (err) return cb(err)
+      return self._loadLinks(cb)
+    })
   })
 }
 
@@ -218,6 +270,26 @@ UnionDB.prototype._putIndices = function (indices, cb) {
   })
 }
 
+UnionDB.prototype._putLink = function (key, path, opts, cb) {
+  if (typeof opts === 'function') return this._putLink(key, path, null, cb)
+  opts = opts || {}
+  var self = this
+
+  var linkPath = p.join(LINKS_PATH, path)
+
+  this._db.put(linkPath, messages.Link.encode({
+    db: {
+      key: key,
+      version: opts.version
+    },
+    localPath: path,
+    remotePath: opts.remotePath
+  }), function (err) {
+    if (err) return cb(err)
+    return self._loadLinks(cb)
+  })
+}
+
 UnionDB.prototype._getIndex = function (cb) {
   var self = this
 
@@ -275,20 +347,8 @@ UnionDB.prototype._getIndex = function (cb) {
 
 // BEGIN Public API
 
-/**
- * TODO: Linking is still WIP.
- */
 UnionDB.prototype.mount = function (key, path, opts, cb) {
-  var self = this
-
-  this._saveLink(key, path, opts, function (err) {
-    if (err) return cb(err)
-    self._createUnionDB(key, opts, function (err, db) {
-      if (err) return cb(err)
-      self.linkTrie.add(path, db)
-      return cb(null, db)
-    })
-  })
+  return this._putLink(key, path, opts, cb)
 }
 
 UnionDB.prototype.get = function (key, opts, cb) {
@@ -298,6 +358,14 @@ UnionDB.prototype.get = function (key, opts, cb) {
 
   this.ready(function (err) {
     if (err) return cb(err)
+
+    // If there's a link, recurse into the linked db.
+    var link = self._linkTrie.get(key, { enclosing: true })
+    if (link) {
+      return link.db.get(key.slice(link.localPath), opts, cb)
+    }
+
+    // Else, first check this database, then recurse into parents.
     self._db.get(p.join(INDEX_PATH, key), function (err, nodes) {
       if (err) return cb(err)
       if (!nodes && self.parent) {
@@ -331,6 +399,12 @@ UnionDB.prototype.put = function (key, value, cb) {
 
   this.ready(function (err) {
     if (err) return cb(err)
+
+    // If there's a link, recurse into the linked db.
+    var link = self._linkTrie.get(key, { enclosing: true })
+    if (link) {
+      return link.db.put(key.slice(link.localPath), value, cb)
+    }
 
     var encoded = (self._codec) ? self._codec.encode(value) : value
 
@@ -426,39 +500,36 @@ UnionDB.prototype._findEntries = function (dir, cb) {
   var prefix = p.join(INDEX_PATH, dir)
   var entries = {}
 
-  this.ready(function (err) {
-    if (err) return cb(err)
+  var stream = self._db.createDiffStream(prefix)
 
-    var stream = self._db.createDiffStream(prefix)
-
-    stream.on('data', function (data) {
-      if (data.type === 'put') {
-        var newEntries = data.nodes.map(function (node) {
-          return messages.Entry.decode(node.value)
-        })
-        entries[data.name] = resolveEntryConflicts(newEntries)
-      }
-    })
-    stream.on('end', function () {
-      return cb(null, entries)
-    })
-    stream.on('error', function (err) {
-      return cb(err)
-    })
+  stream.on('data', function (data) {
+    if (data.type === 'put') {
+      var newEntries = data.nodes.map(function (node) {
+        return messages.Entry.decode(node.value)
+      })
+      entries[data.name] = resolveEntryConflicts(newEntries)
+    }
+  })
+  stream.on('end', function () {
+    return cb(null, entries)
+  })
+  stream.on('error', function (err) {
+    return cb(err)
   })
 }
 
-UnionDB.prototype.list = function (dir, cb) {
+UnionDB.prototype._list = function (dir, cb) {
   var self = this
 
   var prefix = p.join(INDEX_PATH, dir)
 
-  this.ready(function (err) {
+  self._isIndexed(function (err, indexed) {
     if (err) return cb(err)
-    self._isIndexed(function (err, indexed) {
-      if (err) return cb(err)
-      if (!indexed && self.parent) {
-        return self.parent.db._findEntries(dir, function (err, parentEntries) {
+    if (!indexed && self.parent) {
+      self.parent.db.ready(function (err) {
+        if (err) return cb(err)
+        self.parent.db._findEntries(dir, function (err, parentEntries) {
+          console.log('PARENT ENTRIES:', parentEntries)
           if (err) return cb(err)
           self._findEntries(dir, function (err, entries) {
             if (err) return cb(err)
@@ -466,9 +537,10 @@ UnionDB.prototype.list = function (dir, cb) {
             return processEntries(null, parentEntries)
           })
         })
-      }
-      return self._findEntries(dir, processEntries)
-    })
+      })
+    } else {
+      self._findEntries(dir, processEntries)
+    }
   })
 
   function processEntries (err, entries) {
@@ -479,8 +551,18 @@ UnionDB.prototype.list = function (dir, cb) {
         list.push(name.slice(prefix.length))
       }
     }
+    console.log('RETURNING LIST:', list, 'from entries:', entries)
     return cb(null, list)
   }
+}
+
+UnionDB.prototype.list = function (dir, cb) {
+  var self = this
+
+  this.ready(function (err) {
+    if (err) return cb(err)
+    return self._list(dir, cb)
+  })
 }
 
 UnionDB.prototype.watch = function (key, onchange) {
@@ -546,6 +628,23 @@ UnionDB.prototype.version = function (cb) {
 
   this.ready(function (err) {
     if (err) return cb(err)
-    return self._db.version(cb)
+    self._db.version(function (err, dbVersion) {
+      if (err) return cb(err)
+      var sortedLinks = Object.values(self._links).sort(function (l1, l2) {
+        return l1.db.key < l2.db.key
+      })
+      map(sortedLinks, function (link, next) {
+        return link.db.version(next)
+      }, function (err, linkVersions) {
+        if (err) return cb(err)
+
+        var versions = [dbVersion].concat(linkVersions)
+
+        if (err) return cb(err)
+        return cb(null, messages.Version.encode({
+          versions: versions
+        }))
+      })
+    })
   })
 }
