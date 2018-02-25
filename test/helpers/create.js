@@ -14,13 +14,10 @@ function makeFactory () {
     var baseDb = null
     var db = null
 
-    console.log('FACTORY, GETTING DB FOR KEY:', key)
     if (key && dbs[key]) {
-      console.log('FACTORY, REUSING IDX:', dbs[key].idx, 'FOR DB WITH KEY:', key)
       baseDb = dbs[key]
     } else {
       baseDb = hyperdb(ram, key)
-      console.log('SETTING IDX TO:', idx)
       baseDb.idx = idx++
     }
 
@@ -28,7 +25,6 @@ function makeFactory () {
     if (opts.checkout) db = db.checkout(opts.checkout)
 
     db.ready(function (err) {
-      console.log('FACTORY DATABASE IS READY, KEY IS:', db.key)
       if (err) return cb(err)
       dbs[baseDb.key] = baseDb
       db.idx = baseDb.idx
@@ -53,9 +49,7 @@ function fromLayers (layerBatches, cb) {
     if (currentIdx === layerBatches.length) return cb(null, currentDb, dbs)
     if (currentDb) {
       currentDb.version(function (err, version) {
-        console.log('PASSING VERSION:', version)
         if (err) return cb(err)
-        console.log('ABOUT TO MAKE A PARENT WITH KEY:', currentDb.key)
         return makeUnionDB({
           parent: {
             key: currentDb.key,
