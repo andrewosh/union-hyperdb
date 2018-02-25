@@ -40,6 +40,7 @@ function resolveEntryConflicts (entries) {
       // Otherwise, the entry with the most recent layer index should win.
       winningEntry.layerIndex = Math.min(winningEntry.layerIndex, entry.layerIndex)
     }
+    if (entry.link) winningEntry.link = entry.link
   })
   return winningEntry
 }
@@ -128,12 +129,14 @@ UnionDB.prototype._saveMetadata = function (cb) {
 
 UnionDB.prototype._loadDatabase = function (record, cb) {
   var dbMetadata = (record.db) ? record.db : record
+  console.log('dbMeta:', dbMetadata)
   this._createUnionDB(dbMetadata.key, {
     checkout: dbMetadata.version,
     valueEncoding: this.opts.valueEncoding
   }, function (err, db) {
     if (err) return cb(err)
     record.db = db
+    console.log('record is now:', record)
     return cb()
   }, function (err) {
     return cb(err)
@@ -157,27 +160,26 @@ UnionDB.prototype._isIndexed = function (cb) {
 UnionDB.prototype._loadLinks = function (cb) {
   var self = this
   console.log('LOADING LINKS')
-  this._list(LINKS_PATH, function (err, linkNames) {
+  this._findEntries(LINKS_PATH, function (err, entries) {
     if (err) return cb(err)
 
-    console.log('linkNames:', linkNames)
-    each(linkNames, function (name, next) {
-      self._db.get(p.join(LINKS_PATH, name), function (err, encoded) {
+    each(Object.values(entries), function (entry, next) {
+      var linkRecord = entry.link
+      var linkId = messages.Version.encode({
+        versions: [messages.DB.encode(linkRecord.db)]
+      })
+
+      if (self._links[linkId]) return next()
+
+      self._linkTrie.add(linkRecord.localPath, linkRecord)
+
+      console.log('LOADING DATABASE FOR:', linkRecord)
+      self._loadDatabase(linkRecord, function (err) {
         if (err) return cb(err)
-
-        var linkRecord = messages.Link.decode(encoded)
-        var linkId = messages.Version.encode({
-          versions: [messages.DB.encode(linkRecord.db)]
-        })
-
-        self._linkTrie.add(linkRecord.localPath, linkRecord)
-        if (self._links[linkId]) return next()
-
-        self._loadDatabase(linkRecord, function (err) {
-          if (err) return cb(err)
-          self._links[linkId] = linkRecord
-          return next()
-        })
+        console.log('AFTER LOAD, linkRecord:', linkRecord)
+        self._links[linkId] = linkRecord
+        console.log('AFTER LOAD, trie link:', self._linkTrie.get(linkRecord.localPath, { enclosing: true }))
+        return next()
       })
     }, function (err) {
       console.log('DONE')
@@ -235,14 +237,14 @@ UnionDB.prototype._get = function (idx, key, cb) {
   return this.parent.db._get(idx - 1, key, cb)
 }
 
-UnionDB.prototype._makeIndex = function (key, idx, deleted) {
-  var dataPath = p.join(DATA_PATH, key)
-
-  return messages.Entry.encode({
+UnionDB.prototype._makeIndex = function (key, idx, deleted, link) {
+  var entry = {
     deleted: deleted,
-    layerIndex: idx,
-    path: dataPath
-  })
+    layerIndex: idx
+  }
+  if (link) entry.link = link
+  console.log('MADE INDEX:', entry)
+  return messages.Entry.encode(entry)
 }
 
 UnionDB.prototype._putIndex = function (key, idx, deleted, cb) {
@@ -277,7 +279,9 @@ UnionDB.prototype._putLink = function (key, path, opts, cb) {
 
   var linkPath = p.join(LINKS_PATH, path)
 
-  this._db.put(linkPath, messages.Link.encode({
+  console.log('PUTTING AT LINKPATH:', linkPath)
+
+  this._db.put(linkPath, this._makeIndex(linkPath, 0, false, {
     db: {
       key: key,
       version: opts.version
@@ -348,7 +352,14 @@ UnionDB.prototype._getIndex = function (cb) {
 // BEGIN Public API
 
 UnionDB.prototype.mount = function (key, path, opts, cb) {
-  return this._putLink(key, path, opts, cb)
+  var self = this
+
+  console.log('in mount')
+
+  this.ready(function (err) {
+    if (err) return cb(err)
+    return self._putLink(key, path, opts, cb)
+  })
 }
 
 UnionDB.prototype.get = function (key, opts, cb) {
@@ -361,8 +372,11 @@ UnionDB.prototype.get = function (key, opts, cb) {
 
     // If there's a link, recurse into the linked db.
     var link = self._linkTrie.get(key, { enclosing: true })
+    console.log('LINK:', link)
+    console.log('linktrie:', self._linkTrie)
     if (link) {
-      return link.db.get(key.slice(link.localPath), opts, cb)
+      console.log('RECURSING WITH:', key.slice(link.localPath.length))
+      return link.db.get(key.slice(link.localPath.length), opts, cb)
     }
 
     // Else, first check this database, then recurse into parents.
@@ -497,10 +511,9 @@ UnionDB.prototype.index = function (opts, cb) {
 UnionDB.prototype._findEntries = function (dir, cb) {
   var self = this
 
-  var prefix = p.join(INDEX_PATH, dir)
   var entries = {}
 
-  var stream = self._db.createDiffStream(prefix)
+  var stream = self._db.createDiffStream(dir)
 
   stream.on('data', function (data) {
     if (data.type === 'put') {
@@ -511,6 +524,7 @@ UnionDB.prototype._findEntries = function (dir, cb) {
     }
   })
   stream.on('end', function () {
+    console.log('in _findEntries, entries:', entries, 'dir:', dir)
     return cb(null, entries)
   })
   stream.on('error', function (err) {
@@ -518,10 +532,8 @@ UnionDB.prototype._findEntries = function (dir, cb) {
   })
 }
 
-UnionDB.prototype._list = function (dir, cb) {
+UnionDB.prototype._list = function (prefix, dir, cb) {
   var self = this
-
-  var prefix = p.join(INDEX_PATH, dir)
 
   self._isIndexed(function (err, indexed) {
     if (err) return cb(err)
@@ -544,6 +556,7 @@ UnionDB.prototype._list = function (dir, cb) {
   })
 
   function processEntries (err, entries) {
+    console.log('PROCESSING ENTRIES IN LIST:', entries)
     if (err) return cb(err)
     var list = []
     for (var name in entries) {
@@ -561,7 +574,7 @@ UnionDB.prototype.list = function (dir, cb) {
 
   this.ready(function (err) {
     if (err) return cb(err)
-    return self._list(dir, cb)
+    return self._list(INDEX_PATH, p.join(INDEX_PATH, dir), cb)
   })
 }
 

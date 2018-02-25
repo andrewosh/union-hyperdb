@@ -22,6 +22,8 @@ message Link {
 message Entry {
   required bool deleted = 1;
   required uint32 layerIndex = 2;
+
+  optional Link link = 3;
 }
 
 message Version  {

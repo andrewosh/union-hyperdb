@@ -1,4 +1,5 @@
 var hyperdb = require('hyperdb')
+var each = require('async-each')
 var ram = require('random-access-memory')
 
 var uniondb = require('../..')
@@ -39,7 +40,7 @@ function fromLayers (layerBatches, cb) {
 
   function makeNextLayer (err) {
     if (err) return cb(err)
-
+    if (currentIdx === layerBatches.length) return cb(null, currentDb)
     if (currentDb) {
       currentDb.version(function (err, version) {
         if (err) return cb(err)
@@ -61,10 +62,33 @@ function fromLayers (layerBatches, cb) {
   function makeUnionDB (opts) {
     var batch = layerBatches[currentIdx++]
     var db = uniondb(factory, null, opts)
-    currentDb = db
-    db.batch(batch, function (err) {
-      if (err) return cb(err)
-      if (currentIdx === layerBatches.length) return cb(null, currentDb)
+    each(batch, function (cmd, next) {
+      switch (cmd.type) {
+        case 'put':
+          db.put(cmd.key, cmd.value, next)
+          break
+        case 'mount':
+          if (cmd.versioned) {
+            currentDb.version(function (err, version) {
+              if (err) throw err
+              db.mount(currentDb.key, cmd.key, {
+                version: version,
+                remotePath: cmd.remotePath
+              }, next)
+            })
+          } else {
+            db.mount(currentDb.key, cmd.key, {
+              remotePath: cmd.remotePath
+            }, next)
+          }
+          break
+        case 'delete':
+          db.delete(cmd.key, next)
+          break
+      }
+    }, function (err) {
+      if (err) throw err
+      currentDb = db
       return makeNextLayer()
     })
   }
