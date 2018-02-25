@@ -27,5 +27,6 @@ message Entry {
 }
 
 message Version  {
-  repeated bytes versions = 1;
+  required bytes localVersion = 1;
+  map<string, bytes> linkVersions = 2;
 }

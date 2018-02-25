@@ -1,4 +1,4 @@
-var hyperdb = require('hyperdb')
+var hyperdb = require('@andrewosh/hyperdb')
 var each = require('async-each')
 var ram = require('random-access-memory')
 
@@ -6,23 +6,32 @@ var uniondb = require('../..')
 
 function makeFactory () {
   var dbs = {}
+  var idx = 0
   function factory (key, opts, cb) {
     if (typeof opts === 'function') return factory(key, null, opts)
     opts = opts || {}
 
+    var baseDb = null
+    var db = null
+
+    console.log('FACTORY, GETTING DB FOR KEY:', key)
     if (key && dbs[key]) {
-      var db = dbs[key]
-      if (opts.checkout) {
-        return cb(null, db.checkout(opts.checkout))
-      }
-      return cb(null, dbs[key])
+      console.log('FACTORY, REUSING IDX:', dbs[key].idx, 'FOR DB WITH KEY:', key)
+      baseDb = dbs[key]
+    } else {
+      baseDb = hyperdb(ram, key)
+      console.log('SETTING IDX TO:', idx)
+      baseDb.idx = idx++
     }
 
-    console.log('CREATING WITH KEY:', key)
-    db = hyperdb(ram, key, opts)
+    db = baseDb
+    if (opts.checkout) db = db.checkout(opts.checkout)
+
     db.ready(function (err) {
+      console.log('FACTORY DATABASE IS READY, KEY IS:', db.key)
       if (err) return cb(err)
-      dbs[db.key] = db
+      dbs[baseDb.key] = baseDb
+      db.idx = baseDb.idx
       return cb(null, db)
     })
   }
@@ -44,7 +53,9 @@ function fromLayers (layerBatches, cb) {
     if (currentIdx === layerBatches.length) return cb(null, currentDb, dbs)
     if (currentDb) {
       currentDb.version(function (err, version) {
+        console.log('PASSING VERSION:', version)
         if (err) return cb(err)
+        console.log('ABOUT TO MAKE A PARENT WITH KEY:', currentDb.key)
         return makeUnionDB({
           parent: {
             key: currentDb.key,

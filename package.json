@@ -18,7 +18,7 @@
     "tape": "^4.8.0"
   },
   "scripts": {
-    "test": "standard && tape test/*.js"
+    "test": "tape test/*.js"
   },
   "keywords": [
     "hyperdb",

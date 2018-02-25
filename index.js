@@ -50,9 +50,19 @@ function UnionDB (factory, key, opts) {
   if (key && !(key instanceof Buffer) && !(typeof key === 'string')) {
     return new UnionDB(factory, null, opts)
   }
+
+  console.log('OPTS:', opts)
+
   this.opts = opts || {}
   this.parent = this.opts.parent
   this.key = key
+
+  if (this.opts.version) {
+    this.versions = messages.Version.decode(this.opts.version)
+    console.log('VERSIONS SPECIFIED:', this.versions, 'KEY:', key)
+    this.localVersion = this.versions.localVersion
+    this.linkVersions = this.versions.linkVersions
+  }
 
   this.localKey = null
 
@@ -68,11 +78,15 @@ function UnionDB (factory, key, opts) {
   // Set in open.
   this._db = null
 
-  this.ready = thunky(open)
-
   var self = this
+
+  this.ready = thunky(open)
+  this.ready(function (err) {
+    if (err) throw err
+  })
+
   function open (cb) {
-    self._factory(self.key, null, function (err, db) {
+    self._factory(self.key, { checkout: self.localVersion }, function (err, db) {
       if (err) return cb(err)
       if (self.key && self.parent) {
         var error = new Error('Cannot specify both a parent key and layers.')
@@ -82,15 +96,18 @@ function UnionDB (factory, key, opts) {
       self._db.ready(function (err) {
         if (err) return cb(err)
 
+        console.log('AFTER self._db.ready, self._db._heads:', self._db._heads)
+
         self.localKey = self._db.local.key
-        if (self.key) return self._load(cb)
-        self.key = db.key
 
         self._db.watch(LINKS_PATH, function () {
           // Refresh the links whenver any change.
           return self._loadLinks()
         })
 
+        if (self.key) return self._load(cb)
+        self.key = db.key
+        console.log('CONTINUING TO SAVE WITH KEY:', self.key)
         return self._save(cb)
       })
     })
@@ -103,6 +120,7 @@ UnionDB.prototype._getMetadata = function (cb) {
 
   this._db.ready(function (err) {
     if (err) return cb(err)
+    console.log('IN getMetadata, self._db._heads:', self._db._heads)
     self._db.get(META_PATH, function (err, nodes) {
       if (err) return cb(err)
       if (!nodes) return cb(null, null)
@@ -117,6 +135,7 @@ UnionDB.prototype._saveMetadata = function (cb) {
 
   this._db.ready(function (err) {
     if (err) return cb(err)
+    console.log('SAVING METADATA, parents:', [self.parent])
     self._db.put(META_PATH, messages.Metadata.encode({
       parents: [self.parent],
       indexed: self.indexed
@@ -131,12 +150,11 @@ UnionDB.prototype._loadDatabase = function (record, cb) {
   var dbMetadata = (record.db) ? record.db : record
   console.log('dbMeta:', dbMetadata)
   this._createUnionDB(dbMetadata.key, {
-    checkout: dbMetadata.version,
+    version: dbMetadata.version,
     valueEncoding: this.opts.valueEncoding
   }, function (err, db) {
     if (err) return cb(err)
     record.db = db
-    console.log('record is now:', record)
     return cb()
   }, function (err) {
     return cb(err)
@@ -159,17 +177,22 @@ UnionDB.prototype._isIndexed = function (cb) {
 
 UnionDB.prototype._loadLinks = function (cb) {
   var self = this
+
   console.log('LOADING LINKS')
   this._findEntries(LINKS_PATH, function (err, entries) {
     if (err) return cb(err)
 
     each(Object.values(entries), function (entry, next) {
       var linkRecord = entry.link
-      var linkId = messages.Version.encode({
-        versions: [messages.DB.encode(linkRecord.db)]
-      })
+      // TODO: might need a better link identifier.
+      var linkId = linkRecord.localPath
 
+      console.log('self_links:', self._links)
       if (self._links[linkId]) return next()
+
+      if (self.linkVersions && self.linkVersions[linkRecord.localPath]) {
+        linkRecord.db.version = self.linkVersions[linkRecord.localPath]
+      }
 
       self._linkTrie.add(linkRecord.localPath, linkRecord)
 
@@ -192,8 +215,10 @@ UnionDB.prototype._loadLinks = function (cb) {
 UnionDB.prototype._load = function (cb) {
   var self = this
 
+  console.log('BEFORE METADATA, self._db._heads:', self._db._heads)
   this._getMetadata(function (err, metadata) {
     if (err) return cb(err)
+    console.log('METADATA:', metadata, 'and self._db._heads:', self._db._heads)
     if (!metadata) return cb()
     // TODO: handle the case of multiple parents? (i.e. a merge)
     self.parent = metadata.parents[0]
@@ -215,6 +240,7 @@ UnionDB.prototype._save = function (cb) {
 }
 
 UnionDB.prototype._createUnionDB = function (key, opts, cb) {
+  console.log('IN CREATE, opts:', opts)
   return cb(null, new UnionDB(this._factory, key, opts))
 }
 
@@ -382,10 +408,16 @@ UnionDB.prototype.get = function (key, opts, cb) {
     // Else, first check this database, then recurse into parents.
     self._db.get(p.join(INDEX_PATH, key), function (err, nodes) {
       if (err) return cb(err)
+      console.log('IN', self.key, 'WITH CHECKOUT:', self._db._checkout, 'AND KEY:', p.join(INDEX_PATH, key), 'NODES ARE:', nodes)
+      console.log('self._db.key:', self._db.key, 'self._db._heads:', self._db._heads, 'self.parent:', self.parent)
       if (!nodes && self.parent) {
-        return self.parent.db.get(key, cb)
+        return self.parent.db.get(key, opts, cb)
       }
-      if (!nodes) return cb(null, null)
+
+      if (!nodes) {
+        debugger;
+        return cb(null, null)
+      }
 
       var entries = nodes.map(function (node) {
         return messages.Entry.decode(node.value)
@@ -413,6 +445,8 @@ UnionDB.prototype.put = function (key, value, cb) {
 
   this.ready(function (err) {
     if (err) return cb(err)
+
+    console.log('PUTTING KEY:', key, 'VALUE:', value, 'INTO DB:', self._db.key)
 
     // If there's a link, recurse into the linked db.
     var link = self._linkTrie.get(key, { enclosing: true })
@@ -643,19 +677,31 @@ UnionDB.prototype.version = function (cb) {
     if (err) return cb(err)
     self._db.version(function (err, dbVersion) {
       if (err) return cb(err)
+
+      console.log('IN VERSION, dbVersion:', dbVersion)
+
       var sortedLinks = Object.values(self._links).sort(function (l1, l2) {
         return l1.db.key < l2.db.key
       })
+
       map(sortedLinks, function (link, next) {
-        return link.db.version(next)
-      }, function (err, linkVersions) {
+        return link.db.version(function (err, version) {
+          if (err) return next(err)
+          return next(null, { path: link.localPath, version: version })
+        })
+      }, function (err, linkAndVersions) {
         if (err) return cb(err)
 
-        var versions = [dbVersion].concat(linkVersions)
+        var linkVersions = {}
+        Object.keys(linkAndVersions).forEach(function (lak) {
+          linkVersions[lak.path] = lak.version
+        })
 
-        if (err) return cb(err)
+        console.log('IN VERSION, sortedLinks:', sortedLinks, 'linkVersions:', linkVersions)
+
         return cb(null, messages.Version.encode({
-          versions: versions
+          localVersion: dbVersion,
+          linkVersions: linkVersions
         }))
       })
     })
