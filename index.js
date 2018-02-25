@@ -678,26 +678,32 @@ UnionDB.prototype.version = function (cb) {
     self._db.version(function (err, dbVersion) {
       if (err) return cb(err)
 
-      console.log('IN VERSION, dbVersion:', dbVersion)
+      console.log('IN VERSION, dbVersion:', dbVersion, 'self._links:', self._links)
 
       var sortedLinks = Object.values(self._links).sort(function (l1, l2) {
         return l1.db.key < l2.db.key
       })
 
+      console.log('IN VERSION, sortedLinks:', sortedLinks)
+
       map(sortedLinks, function (link, next) {
-        return link.db.version(function (err, version) {
+        link.db.version(function (err, version) {
           if (err) return next(err)
+          console.log('IN VERSION, link version:', version)
           return next(null, { path: link.localPath, version: version })
         })
       }, function (err, linkAndVersions) {
         if (err) return cb(err)
 
+        console.log('IN VERSION, linkAndVersions:', linkAndVersions)
+
         var linkVersions = {}
-        Object.keys(linkAndVersions).forEach(function (lak) {
+        linkAndVersions.forEach(function (lak) {
+          console.log('IN VERSION, lak:', lak)
           linkVersions[lak.path] = lak.version
         })
 
-        console.log('IN VERSION, sortedLinks:', sortedLinks, 'linkVersions:', linkVersions)
+        console.log('IN VERSION, final linkVersions:', linkVersions)
 
         return cb(null, messages.Version.encode({
           localVersion: dbVersion,
