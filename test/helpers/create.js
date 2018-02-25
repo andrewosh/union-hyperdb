@@ -30,6 +30,7 @@ function makeFactory () {
 }
 
 function fromLayers (layerBatches, cb) {
+  var dbs = []
   var currentDb = null
   var currentIdx = 0
 
@@ -40,7 +41,7 @@ function fromLayers (layerBatches, cb) {
 
   function makeNextLayer (err) {
     if (err) return cb(err)
-    if (currentIdx === layerBatches.length) return cb(null, currentDb)
+    if (currentIdx === layerBatches.length) return cb(null, currentDb, dbs)
     if (currentDb) {
       currentDb.version(function (err, version) {
         if (err) return cb(err)
@@ -89,6 +90,7 @@ function fromLayers (layerBatches, cb) {
     }, function (err) {
       if (err) throw err
       currentDb = db
+      dbs.push(db)
       return makeNextLayer()
     })
   }
