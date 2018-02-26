@@ -286,7 +286,6 @@ UnionDB.prototype._putLink = function (key, path, opts, cb) {
 
   var linkPath = p.join(LINKS_PATH, path)
 
-
   this._db.put(linkPath, this._makeIndex(linkPath, 0, false, {
     db: {
       key: key,
@@ -388,7 +387,6 @@ UnionDB.prototype.get = function (key, opts, cb) {
       }
 
       if (!nodes) {
-        debugger;
         return cb(null, null)
       }
 

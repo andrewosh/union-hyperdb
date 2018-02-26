@@ -12,13 +12,13 @@
     "thunky": "^1.0.2"
   },
   "devDependencies": {
-    "hyperdb": "^2.1.0",
+    "@andrewosh/hyperdb": "^2.1.0",
     "random-access-memory": "^2.4.0",
     "standard": "^10.0.3",
     "tape": "^4.8.0"
   },
   "scripts": {
-    "test": "tape test/*.js"
+    "test": "standard && tape test/*.js"
   },
   "keywords": [
     "hyperdb",
