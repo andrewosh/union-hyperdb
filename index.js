@@ -286,8 +286,6 @@ UnionDB.prototype._putLink = function (key, path, opts, cb) {
 
   var linkPath = p.join(LINKS_PATH, path)
 
-  console.log('UNIONDB PUTTING LINK AT:', path, 'WITH REMOTE:', opts.remotePath)
-
   this._db.put(linkPath, this._makeIndex(linkPath, 0, false, {
     db: {
       key: key,
@@ -376,12 +374,9 @@ UnionDB.prototype.get = function (key, opts, cb) {
     if (err) return cb(err)
 
     // If there's a link, recurse into the linked db.
-    console.log('UNIONDB, GETTING:', key, 'AND SELF.KEY:', self.key)
     var link = self._linkTrie.get(key, { enclosing: true })
-    console.log('UNIONDB, LINK:', link)
     if (link) {
       var remotePath = p.resolve(key.slice(link.localPath.length))
-      console.log('UNIONDB REMOTE PATH:', remotePath, 'AND LINK.REMOTEPATH:', link.remotePath)
       if (link.remotePath) remotePath = p.resolve(p.join(link.remotePath, remotePath))
       return link.db.get(remotePath, opts, cb)
     }
