@@ -286,6 +286,8 @@ UnionDB.prototype._putLink = function (key, path, opts, cb) {
 
   var linkPath = p.join(LINKS_PATH, path)
 
+  console.log('UNIONDB PUTTING LINK AT:', path, 'WITH REMOTE:', opts.remotePath)
+
   this._db.put(linkPath, this._makeIndex(linkPath, 0, false, {
     db: {
       key: key,
@@ -374,9 +376,14 @@ UnionDB.prototype.get = function (key, opts, cb) {
     if (err) return cb(err)
 
     // If there's a link, recurse into the linked db.
+    console.log('UNIONDB, GETTING:', key, 'AND SELF.KEY:', self.key)
     var link = self._linkTrie.get(key, { enclosing: true })
+    console.log('UNIONDB, LINK:', link)
     if (link) {
-      return link.db.get(key.slice(link.localPath.length), opts, cb)
+      var remotePath = p.resolve(key.slice(link.localPath.length))
+      console.log('UNIONDB REMOTE PATH:', remotePath, 'AND LINK.REMOTEPATH:', link.remotePath)
+      if (link.remotePath) remotePath = p.resolve(p.join(link.remotePath, remotePath))
+      return link.db.get(remotePath, opts, cb)
     }
 
     // Else, first check this database, then recurse into parents.
@@ -427,7 +434,7 @@ UnionDB.prototype.put = function (key, value, cb) {
 
     var dataPath = p.join(DATA_PATH, key)
 
-    // TODO: this operation should be transactional.
+    // TODO: This operation should be transactional.
     self._db.put(dataPath, encoded, function (err) {
       if (err) return cb(err)
       self._putIndex(key, 0, false, function (err) {
@@ -578,12 +585,45 @@ UnionDB.prototype.list = function (dir, cb) {
 }
 
 UnionDB.prototype.watch = function (key, onchange) {
-  return this._db.watch(p.join(DATA_PATH, key), function change (nodes) {
+  var self = this
+
+  // Check to see if there are any links that are prefixed by `key`. If so, watch each
+  // one and propagate any changes through `onchange`
+  var watchFuncs = {}
+
+  // TODO: remove a watch if its corresponding link is deleted.
+  // TODO: add a watch if a link is added to a watched directory (currently will have to re-watch).
+  Object.keys(self._links).forEach(watchLink)
+
+  watchFuncs.push(this._db.watch(p.join(DATA_PATH, key), function change (nodes) {
     return onchange(nodes.map(function (node) {
       node.key = node.key.slice(DATA_PATH.length)
       return node
     }))
-  })
+  }))
+
+  return unwatch
+
+  function unwatch () {
+    watchFuncs.forEach(function (func) {
+      func()
+    })
+  }
+
+  function watchLink (linkKey) {
+    if (linkKey.startsWith(key) || key.startsWith(linkKey)) {
+      var prefix = linkKey.slice(key.length)
+      var suffix = key.slice(linkKey.length)
+      var linkRecord = self._links[linkKey]
+
+      watchFuncs.push(linkRecord.db.watch((suffix === '') ? '/' : suffix, function change (nodes) {
+        return onchange(nodes.map(function (node) {
+          node.key = p.join(prefix, node.key)
+          return node
+        }))
+      }))
+    }
+  }
 }
 
 UnionDB.prototype.replicate = function (opts) {

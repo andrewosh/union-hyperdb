@@ -24,6 +24,26 @@ test('simple read from a mount works', function (t) {
   })
 })
 
+test('read from a mount with a remote link works', function (t) {
+  t.plan(1 + 3 * 2)
+
+  create.fromLayers([
+    [
+      { type: 'put', key: 'a/b/c', value: 'hello' }
+    ],
+    [
+      { type: 'mount', key: 'b', remotePath: '/a/b' },
+      { type: 'put', key: 'd', value: 'goodbye' }
+    ]
+  ], function (err, db) {
+    t.error(err)
+    verify.values(t, db, {
+      'b/c': 'hello',
+      'd': 'goodbye'
+    })
+  })
+})
+
 test('parent layers have frozen links', function (t) {
   t.plan(4 + 3 * 3)
 
