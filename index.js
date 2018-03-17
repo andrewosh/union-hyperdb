@@ -229,7 +229,7 @@ UnionDB.prototype._createUnionDB = function (key, opts, cb) {
 UnionDB.prototype._get = function (idx, key, cb) {
   var self = this
 
-  if (!this._db) return cb(new Error('Attempting to get from an uninitialized database.'))
+  if (!this._db) return process.nextTick(cb, new Error('Attempting to get from an uninitialized database.'))
   if (idx === 0) {
     return this._db.get(p.join(DATA_PATH, key), function (err, nodes) {
       if (err) return cb(err)
