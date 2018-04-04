@@ -138,11 +138,16 @@ UnionDB.prototype._saveMetadata = function (cb) {
   })
 }
 
-UnionDB.prototype._loadDatabase = function (record, cb) {
+UnionDB.prototype._loadDatabase = function (record, opts, cb) {
+  if (typeof opts === 'function') return this._loadDatabase(record, null, opts)
+  opts = opts || {}
+
   var dbMetadata = (record.db) ? record.db : record
+
   this._createUnionDB(dbMetadata.key, {
     version: dbMetadata.version,
-    valueEncoding: this.opts.valueEncoding
+    valueEncoding: this.opts.valueEncoding,
+    sparse: opts.sparse || false
   }, function (err, db) {
     if (err) return cb(err)
     record.db = db
@@ -185,7 +190,7 @@ UnionDB.prototype._loadLinks = function (cb) {
 
       self._linkTrie.add(linkRecord.localPath, linkRecord)
 
-      self._loadDatabase(linkRecord, function (err) {
+      self._loadDatabase(linkRecord, { sparse: true }, function (err) {
         if (err) return cb(err)
         self._links[linkId] = linkRecord
         return next()
