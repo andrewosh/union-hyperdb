@@ -14,10 +14,10 @@ var codecs = require('codecs')
 var Trie = require('./lib/trie')
 var messages = require('./lib/messages')
 
-const META_PATH = '/META/'
-const INDEX_PATH = '/INDEX/'
-const DATA_PATH = '/DATA/'
-const LINKS_PATH = '/LINKS'
+const META_PATH = 'META/'
+const INDEX_PATH = 'INDEX/'
+const DATA_PATH = 'DATA/'
+const LINKS_PATH = 'LINKS/'
 
 module.exports = UnionDB
 
@@ -116,7 +116,7 @@ UnionDB.prototype._getMetadata = function (cb) {
     if (err) return cb(err)
     self._db.get(META_PATH, function (err, nodes) {
       if (err) return cb(err)
-      if (!nodes) return cb(null, null)
+      if (!nodes || !nodes.length) return cb(null, null)
       if (nodes.length > 1) console.error('Conflict in metadata file -- using first node\'s value.')
       return cb(null, messages.Metadata.decode(nodes[0].value))
     })
@@ -232,6 +232,7 @@ UnionDB.prototype._createUnionDB = function (key, opts, cb) {
 }
 
 UnionDB.prototype._get = function (idx, key, cb) {
+  console.log('GETTING IDX:', idx, 'KEY:', key)
   var self = this
 
   if (!this._db) return process.nextTick(cb, new Error('Attempting to get from an uninitialized database.'))
@@ -247,6 +248,7 @@ UnionDB.prototype._get = function (idx, key, cb) {
       return cb(null, nodes)
     })
   }
+  console.log('IDX:', idx)
   return this.parent.db._get(idx - 1, key, cb)
 }
 
@@ -339,17 +341,16 @@ UnionDB.prototype._getIndex = function (cb) {
 
   function getLocalIndex (cb) {
     var allEntries = {}
-    var diffStream = self._db.createDiffStream(INDEX_PATH)
-    diffStream.on('data', function (data) {
-      if (data.type === 'put') {
-        // We only care about the last put for each key in the layer.
-        allEntries[data.name] = data.nodes.map(function (node) {
+    self._db.list(INDEX_PATH, function (err, nodes) {
+      if (err) return cb(err)
+      if (!nodes || !nodes.length) return cb(null, allEntries)
+      console.log('nodes:', nodes)
+      // We only care about the last put for each key in the layer.
+      nodes.forEach(function (nodes) {
+        allEntries[nodes[0].key] = nodes.map(function (node) {
           return messages.Entry.decode(node.value)
         })
-      }
-    })
-    diffStream.once('error', cb)
-    diffStream.once('end', function () {
+      })
       Object.keys(allEntries).forEach(function (key) {
         var entries = allEntries[key]
         allEntries[key] = resolveEntryConflicts(entries)
@@ -389,13 +390,11 @@ UnionDB.prototype.get = function (key, opts, cb) {
     // Else, first check this database, then recurse into parents.
     self._db.get(p.join(INDEX_PATH, key), function (err, nodes) {
       if (err) return cb(err)
-      if (!nodes && self.parent) {
+      if ((!nodes || !nodes.length) && self.parent) {
         return self.parent.db.get(key, opts, cb)
       }
 
-      if (!nodes) {
-        return cb(null, null)
-      }
+      if (!nodes || !nodes.length) return cb(null, null)
 
       var entries = nodes.map(function (node) {
         return messages.Entry.decode(node.value)
@@ -521,23 +520,18 @@ UnionDB.prototype.index = function (opts, cb) {
 UnionDB.prototype._findEntries = function (dir, cb) {
   var self = this
 
-  var entries = {}
-
-  var stream = self._db.createDiffStream(dir)
-
-  stream.on('data', function (data) {
-    if (data.type === 'put') {
-      var newEntries = data.nodes.map(function (node) {
+  self._db.list(dir, function (err, nodes) {
+    if (err) return cb(err)
+    if (!nodes || !nodes.length) return cb(null, {})
+    console.log('nodes:', nodes)
+    var entries = {}
+    nodes.forEach(function (nodes) {
+      var newEntries = nodes.map(function (node) {
         return messages.Entry.decode(node.value)
       })
-      entries[data.name] = resolveEntryConflicts(newEntries)
-    }
-  })
-  stream.on('end', function () {
+      entries[nodes[0].key] = resolveEntryConflicts(newEntries)
+    })
     return cb(null, entries)
-  })
-  stream.on('error', function (err) {
-    return cb(err)
   })
 }
 
@@ -565,6 +559,7 @@ UnionDB.prototype._list = function (prefix, dir, cb) {
 
   function processEntries (err, entries) {
     if (err) return cb(err)
+    console.log('PROCESSING ENTRIES:', entries, 'prefix:', prefix)
     var list = []
     for (var name in entries) {
       if (!entries[name].deleted) {

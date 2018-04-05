@@ -13,7 +13,7 @@ test('put/list with a single layer', function (t) {
     t.error(err)
     db.list('/', function (err, l) {
       t.error(err)
-      t.same(l, ['b', 'a'])
+      t.same(l, ['a', 'b'])
     })
   })
 })
@@ -34,7 +34,7 @@ test('put/get with two layers', function (t) {
     t.error(err)
     db.list('/', function (err, l) {
       t.error(err)
-      t.same(l, ['b', 'a', 'c'])
+      t.same(l, ['a', 'b', 'c'])
     })
   })
 })
