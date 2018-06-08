@@ -161,7 +161,7 @@ UnionDB.prototype._loadParent = function (cb) {
   if (this.parent) {
     return this._loadDatabase(this.parent, cb)
   }
-  return cb()
+  process.nextTick(cb, null)
 }
 
 UnionDB.prototype._isIndexed = function (cb) {
@@ -188,7 +188,9 @@ UnionDB.prototype._loadLinks = function (cb) {
         linkRecord.db.version = self.linkVersions[linkRecord.localPath]
       }
 
-      self._linkTrie.add(linkRecord.localPath, linkRecord)
+      self._linkTrie.add(linkRecord.localPath, linkRecord, {
+        push: !!linkRecord.flat
+      })
 
       self._loadDatabase(linkRecord, { sparse: true }, function (err) {
         if (err) return cb(err)
@@ -299,7 +301,8 @@ UnionDB.prototype._putLink = function (key, path, opts, cb) {
       version: opts.version
     },
     localPath: path,
-    remotePath: opts.remotePath
+    remotePath: opts.remotePath,
+    flat: !!opts.flat
   }), function (err) {
     if (err) return cb(err)
     return self._loadLinks(cb)
@@ -344,7 +347,6 @@ UnionDB.prototype._getIndex = function (cb) {
     self._db.list(INDEX_PATH, function (err, nodes) {
       if (err) return cb(err)
       if (!nodes || !nodes.length) return cb(null, allEntries)
-      console.log('nodes:', nodes)
       // We only care about the last put for each key in the layer.
       nodes.forEach(function (nodes) {
         allEntries[nodes[0].key] = nodes.map(function (node) {
@@ -633,37 +635,29 @@ UnionDB.prototype.replicate = function (opts) {
     proxy.setWritable(stream)
   })
 
-    /*
-  this.ready(function (err) {
-    if (err) proxy.destroy(err)
-
-    var parentStream = (self.parent) ? self.parent.db.replicate(opts) : null
-    var myStream = self._db.replicate(opts)
-    var stream = null
-
-    if (parentStream) {
-      stream = multiplex()
-      var s1 = stream.createStream()
-      var s2 = stream.createStream()
-      pump(parentStream, s1, parentStream, function (err) {
-        if (err) proxy.destroy(err)
-      })
-      pump(myStream, s2, myStream, function (err) {
-        if (err) proxy.destroy(err)
-      })
-    } else {
-      stream = myStream
-    }
-    proxy.setReadable(stream)
-    proxy.setWritable(stream)
-  })
-  */
-
   return proxy
 }
 
-UnionDB.prototype.share = function (dir, cb) {
+UnionDB.prototype.fork = function (cb) {
+  var self = this
 
+  this.version(function (err, version) {
+    if (err) return cb(err)
+    return finalize(version)
+  })
+
+  function finalize (version) {
+    var fork = UnionDB(self._factory, null, Object.assign(self.opts, {
+      parent: {
+        key: self.key,
+        version: version
+      }
+    }))
+    fork.ready(function (err) {
+      if (err) return cb(err)
+      return cb(null, fork)
+    })
+  }
 }
 
 UnionDB.prototype.authorize = function (key) {
