@@ -1,7 +1,6 @@
 var p = require('path')
 var EventEmitter = require('events').EventEmitter
 
-var duplexify = require('duplexify')
 var map = require('async-each')
 var each = map
 // var multiplex = require('multiplex')
@@ -625,17 +624,7 @@ UnionDB.prototype.watch = function (key, onchange) {
 
 UnionDB.prototype.replicate = function (opts) {
   var self = this
-
-  var proxy = duplexify()
-
-  this.ready(function (err) {
-    if (err) proxy.destroy(err)
-    var stream = self._db.replicate(opts)
-    proxy.setReadable(stream)
-    proxy.setWritable(stream)
-  })
-
-  return proxy
+  return self._db.replicate(opts)
 }
 
 UnionDB.prototype.fork = function (cb) {
