@@ -7,7 +7,6 @@ var each = map
 // var pump = require('pump')
 var inherits = require('inherits')
 var bulk = require('bulk-write-stream')
-var thunky = require('thunky')
 var codecs = require('codecs')
 
 var Trie = require('./lib/trie')
@@ -76,9 +75,11 @@ function UnionDB (factory, key, opts) {
 
   var self = this
 
-  this.ready = thunky(open)
-  this.ready(function (err) {
-    if (err) throw err
+  this.ready = new Promise(function (resolve, reject) {
+    open(function (err) {
+      if (err) return reject(err)
+      return resolve()
+    })
   })
 
   function open (cb) {
@@ -311,8 +312,7 @@ UnionDB.prototype._putLink = function (key, path, opts, cb) {
 UnionDB.prototype._getIndex = function (cb) {
   var self = this
 
-  this.ready(function (err) {
-    if (err) return cb(err)
+  this.ready.then(function () {
     self._isIndexed(function (err, indexed) {
       if (err) return cb(err)
       if (indexed || !self.parent) {
@@ -339,6 +339,8 @@ UnionDB.prototype._getIndex = function (cb) {
         })
       }
     })
+  }).catch(function (err) {
+    return cb(err)
   })
 
   function getLocalIndex (cb) {
@@ -366,9 +368,10 @@ UnionDB.prototype._getIndex = function (cb) {
 UnionDB.prototype.mount = function (key, path, opts, cb) {
   var self = this
 
-  this.ready(function (err) {
-    if (err) return cb(err)
+  this.ready.then(function () {
     return self._putLink(key, path, opts, cb)
+  }).catch(function (err) {
+    return cb(err)
   })
 }
 
@@ -377,9 +380,7 @@ UnionDB.prototype.get = function (key, opts, cb) {
 
   var self = this
 
-  this.ready(function (err) {
-    if (err) return cb(err)
-
+  this.ready.then(function () {
     // If there's a link, recurse into the linked db.
     var link = self._linkTrie.get(key, { enclosing: true })
     if (link) {
@@ -415,15 +416,15 @@ UnionDB.prototype.get = function (key, opts, cb) {
         return self._get(resolvedEntry.layerIndex, key, cb)
       }
     })
+  }).catch(function (err) {
+    return cb(err)
   })
 }
 
 UnionDB.prototype.put = function (key, value, cb) {
   var self = this
 
-  this.ready(function (err) {
-    if (err) return cb(err)
-
+  this.ready.then(function () {
     // If there's a link, recurse into the linked db.
     var link = self._linkTrie.get(key, { enclosing: true })
     if (link) {
@@ -441,14 +442,15 @@ UnionDB.prototype.put = function (key, value, cb) {
         return cb(err)
       })
     })
+  }).catch(function (err) {
+    return cb(err)
   })
 }
 
 UnionDB.prototype.batch = function (records, cb) {
   var self = this
 
-  this.ready(function (err) {
-    if (err) return cb(err)
+  this.ready.then(function () {
     // Warning: records is mutated in this map to save an iteration.
     var stats = records.map(function (record) {
       var stat = {
@@ -462,6 +464,8 @@ UnionDB.prototype.batch = function (records, cb) {
     })
     var toBatch = records.concat(stats)
     return self._db.batch(toBatch, cb)
+  }).catch(function (err) {
+    return cb(err)
   })
 }
 
@@ -477,12 +481,12 @@ UnionDB.prototype.createWriteStream = function () {
 UnionDB.prototype.delete = function (key, cb) {
   var self = this
 
-  this.ready(function (err) {
-    if (err) return cb(err)
-
+  this.ready.then(function () {
     self._putIndex(key, 0, true, function (err) {
       return cb(err)
     })
+  }).catch(function (err) {
+    return cb(err)
   })
 }
 
@@ -542,8 +546,7 @@ UnionDB.prototype._list = function (prefix, dir, cb) {
   self._isIndexed(function (err, indexed) {
     if (err) return cb(err)
     if (!indexed && self.parent) {
-      self.parent.db.ready(function (err) {
-        if (err) return cb(err)
+      self.parent.db.ready.then(function () {
         self.parent.db._findEntries(dir, function (err, parentEntries) {
           if (err) return cb(err)
           self._findEntries(dir, function (err, entries) {
@@ -552,6 +555,8 @@ UnionDB.prototype._list = function (prefix, dir, cb) {
             return processEntries(null, parentEntries)
           })
         })
+      }).catch(function (err) {
+        return cb(err)
       })
     } else {
       self._findEntries(dir, processEntries)
@@ -574,9 +579,10 @@ UnionDB.prototype._list = function (prefix, dir, cb) {
 UnionDB.prototype.list = function (dir, cb) {
   var self = this
 
-  this.ready(function (err) {
-    if (err) return cb(err)
+  this.ready.then(function () {
     return self._list(INDEX_PATH, p.join(INDEX_PATH, dir), cb)
+  }).catch(function (err) {
+    return cb(err)
   })
 }
 
@@ -642,9 +648,10 @@ UnionDB.prototype.fork = function (cb) {
         version: version
       }
     }))
-    fork.ready(function (err) {
-      if (err) return cb(err)
+    fork.ready.then(function () {
       return cb(null, fork)
+    }).catch(function (err) {
+      return cb(err)
     })
   }
 }
@@ -656,8 +663,7 @@ UnionDB.prototype.authorize = function (key) {
 UnionDB.prototype.version = function (cb) {
   var self = this
 
-  this.ready(function (err) {
-    if (err) return cb(err)
+  this.ready.then(function () {
     self._db.version(function (err, dbVersion) {
       if (err) return cb(err)
 
@@ -684,5 +690,7 @@ UnionDB.prototype.version = function (cb) {
         }))
       })
     })
+  }).catch(function (err) {
+    return cb(err)
   })
 }
