@@ -104,9 +104,9 @@ function fromLayers (layerBatches, cb) {
 function twoFromLayers (layerFiles, cb) {
   fromLayers(layerFiles, function (err, db1) {
     if (err) return cb(err)
-    db1.ready.then(function () {
+    db1.ready().then(function () {
       var db2 = uniondb(makeFactory(), db1.key, { valueEncoding: 'utf8' })
-      db2.ready.then(function () {
+      db2.ready().then(function () {
         return cb(null, db1, db2)
       }).catch(function (err) {
         return cb(err)
@@ -119,9 +119,9 @@ function twoFromLayers (layerFiles, cb) {
 
 function two (cb) {
   var db1 = uniondb(makeFactory(), { valueEncoding: 'utf8' })
-  db1.ready.then(function () {
+  db1.ready().then(function () {
     var db2 = uniondb(makeFactory(), db1.key, { valueEncoding: 'utf8' })
-    db2.ready.then(function () {
+    db2.ready().then(function () {
       return cb(null, db1, db2)
     }).catch(function (err) {
       return cb(err)
