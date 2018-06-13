@@ -105,10 +105,41 @@ async function fromLayers (layerBatches, cb) {
 }
 
 function twoFromLayers (layerFiles, cb) {
-  fromLayers(layerFiles, function (err, db1) {
+  makeFactory((err, f1) => {
     if (err) return cb(err)
+    finish(f1)
+  })
+
+  function finish (f1) {
+    fromLayers(layerFiles, function (err, db1) {
+      if (err) return cb(err)
+      db1.ready().then(function () {
+        var db2 = uniondb(f1, db1.key, { valueEncoding: 'utf8' })
+        db2.ready().then(function () {
+          return cb(null, db1, db2)
+        }).catch(function (err) {
+          return cb(err)
+        })
+      }).catch(function (err) {
+        return cb(err)
+      })
+    })
+  })
+}
+
+function two (cb) {
+  makeFactory((err, f1) => {
+    if (err) return cb(err)
+    makeFactory((err, f2) => {
+      if (err) return cb(err)
+      finish(f1, f2)
+    })
+  })
+
+  function finish (f1, f2) {
+    var db1 = uniondb(f1, { valueEncoding: 'utf8' })
     db1.ready().then(function () {
-      var db2 = uniondb(makeFactory(), db1.key, { valueEncoding: 'utf8' })
+      var db2 = uniondb(f2, db1.key, { valueEncoding: 'utf8' })
       db2.ready().then(function () {
         return cb(null, db1, db2)
       }).catch(function (err) {
@@ -117,21 +148,7 @@ function twoFromLayers (layerFiles, cb) {
     }).catch(function (err) {
       return cb(err)
     })
-  })
-}
-
-function two (cb) {
-  var db1 = uniondb(makeFactory(), { valueEncoding: 'utf8' })
-  db1.ready().then(function () {
-    var db2 = uniondb(makeFactory(), db1.key, { valueEncoding: 'utf8' })
-    db2.ready().then(function () {
-      return cb(null, db1, db2)
-    }).catch(function (err) {
-      return cb(err)
-    })
-  }).catch(function (err) {
-    return cb(err)
-  })
+  }
 }
 
 module.exports = {
