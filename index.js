@@ -90,28 +90,24 @@ function UnionDB (factory, key, opts) {
       throw error
     }
     let opts = Object.assign({}, self.opts, { valueEncoding: 'binary', version: undefined })
-    console.log('CREATING HYPERDB WITH KEY:', self.key, 'opts:', opts, 'localVersion:', self.localVersion)
     let db = factory(self.key, opts)
     if (self.localVersion) db = db.checkout(self.localVersion, opts)
     self._db = db
     return new Promise((resolve, reject) => {
       self._db.ready(function (err) {
         if (err) return reject(err)
-        console.log('self._db is ready')
         self.localKey = self._db.local.key
         self._db.watch(LINKS_PATH, function () {
           // Refresh the links whenever any change.
           return self._loadLinks()
         })
         if (self.key) {
-          console.log('loading')
           return self._load(err => {
             if (err) return reject(err)
             return resolve()
           })
         }
         self.key = db.key
-        console.log('saving')
         return self._save(err => {
           if (err) return reject(err)
           return resolve()
@@ -127,9 +123,7 @@ UnionDB.prototype._getMetadata = function (cb) {
 
   this._db.ready(function (err) {
     if (err) return cb(err)
-    console.log('GETTING META_PATH')
     self._db.get(META_PATH, function (err, nodes) {
-      console.log('GOT META PATH')
       if (err) return cb(err)
       if (!nodes || !nodes.length) return cb(null, null)
       if (nodes.length > 1) console.error('Conflict in metadata file -- using first node\'s value.')
@@ -158,7 +152,6 @@ UnionDB.prototype._loadDatabase = function (record, opts, cb) {
   opts = opts || {}
 
   var dbMetadata = (record.db) ? record.db : record
-  console.log('dbMetadata:', dbMetadata)
 
   this._createUnionDB(dbMetadata.key, {
     version: dbMetadata.version,
@@ -173,7 +166,6 @@ UnionDB.prototype._loadDatabase = function (record, opts, cb) {
 
 UnionDB.prototype._loadParent = function (cb) {
   if (this.parent) {
-    console.log('LOADING PARENT:', this.parent)
     return this._loadDatabase(this.parent, cb)
   }
   process.nextTick(cb, null)
@@ -222,14 +214,11 @@ UnionDB.prototype._loadLinks = function (cb) {
 UnionDB.prototype._load = function (cb) {
   var self = this
 
-  console.log('GETTING METADATA')
   this._getMetadata(function (err, metadata) {
-    console.log('GOT METADATA')
     if (err) return cb(err)
     if (!metadata) return cb()
     // TODO: handle the case of multiple parents? (i.e. a merge)
     self.parent = metadata.parents[0]
-    console.log('LOADING PARENT')
     self._loadParent(function (err) {
       if (err) return cb(err)
       return self._loadLinks(cb)
@@ -248,7 +237,6 @@ UnionDB.prototype._save = function (cb) {
 }
 
 UnionDB.prototype._createUnionDB = function (key, opts, cb) {
-  console.log('CREATING UNIONDB WITH OPTS:', opts)
   let db = new UnionDB(this._factory, key, opts)
   db.ready(err => {
     if (err) return cb(err)
@@ -257,7 +245,6 @@ UnionDB.prototype._createUnionDB = function (key, opts, cb) {
 }
 
 UnionDB.prototype._get = function (idx, key, cb) {
-  console.log('GETTING IDX:', idx, 'KEY:', key)
   var self = this
 
   if (!this._db) return process.nextTick(cb, new Error('Attempting to get from an uninitialized database.'))
@@ -273,7 +260,6 @@ UnionDB.prototype._get = function (idx, key, cb) {
       return cb(null, nodes)
     })
   }
-  console.log('IDX:', idx)
   return this.parent.db._get(idx - 1, key, cb)
 }
 
@@ -399,7 +385,6 @@ UnionDB.prototype.mount = function (key, path, opts, cb) {
 }
 
 UnionDB.prototype.get = function (key, opts, cb) {
-  console.log('TOP-LEVEL GETTING:', key, 'self.key:', this._db.key)
   if (typeof opts === 'function') return this.get(key, {}, opts)
 
   var self = this
@@ -410,20 +395,16 @@ UnionDB.prototype.get = function (key, opts, cb) {
     if (link) {
       var remotePath = p.resolve(key.slice(link.localPath.length))
       if (link.remotePath) remotePath = p.resolve(p.join(link.remotePath, remotePath))
-      console.log('link:', link)
       return link.db.get(remotePath, opts, cb)
     }
 
     // Else, first check this database, then recurse into parents.
-    console.log('CHECKING DB')
     self._db.get(p.join(INDEX_PATH, key), function (err, nodes) {
       if (err) return cb(err)
       if ((!nodes || !nodes.length) && self.parent) {
-        console.log('GOING INTO PARENT')
         return self.parent.db.get(key, opts, cb)
       }
 
-      console.log('nodes:', nodes)
       if (!nodes || !nodes.length) return cb(null, null)
 
       var entries = nodes.map(function (node) {
@@ -454,7 +435,6 @@ UnionDB.prototype.put = function (key, value, cb) {
 
   this._ready.then(function () {
     // If there's a link, recurse into the linked db.
-    console.log('PUTTING KEY:', key, 'self.key:', self._db.key)
     var link = self._linkTrie.get(key, { enclosing: true })
     if (link) {
       return link.db.put(key.slice(link.localPath), value, cb)
@@ -557,7 +537,6 @@ UnionDB.prototype._findEntries = function (dir, cb) {
   self._db.list(dir, function (err, nodes) {
     if (err) return cb(err)
     if (!nodes || !nodes.length) return cb(null, {})
-    console.log('nodes:', nodes)
     var entries = {}
     nodes.forEach(function (nodes) {
       var newEntries = nodes.map(function (node) {
@@ -594,7 +573,6 @@ UnionDB.prototype._list = function (prefix, dir, cb) {
 
   function processEntries (err, entries) {
     if (err) return cb(err)
-    console.log('PROCESSING ENTRIES:', entries, 'prefix:', prefix)
     var list = []
     for (var name in entries) {
       if (!entries[name].deleted) {
@@ -704,7 +682,6 @@ UnionDB.prototype.version = function (cb) {
           linkVersions[lak.path] = lak.version
         })
 
-        console.log('dbVersion:', dbVersion)
         return cb(null, messages.Version.encode({
           localVersion: dbVersion,
           linkVersions: linkVersions
