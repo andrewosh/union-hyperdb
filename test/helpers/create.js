@@ -1,48 +1,48 @@
-var hyperdb = require('@andrewosh/hyperdb')
-var each = require('async-each')
-var ram = require('random-access-memory')
+const p = require('path')
 
-var uniondb = require('../..')
+const hyperdb = require('hyperdb')
+const each = require('async-each')
+const corestore = require('corestore')
 
-function makeFactory () {
-  var dbs = {}
-  var idx = 0
-  function factory (key, opts, cb) {
-    if (typeof opts === 'function') return factory(key, null, opts)
-    opts = opts || {}
+const uniondb = require('../..')
 
-    var baseDb = null
-    var db = null
+const STORAGE_DIR = p.join(__dirname, '..', 'test-storage')
+var idx = 0
 
-    if (key && dbs[key]) {
-      baseDb = dbs[key]
-    } else {
-      baseDb = hyperdb(ram, key)
-      baseDb.idx = idx++
+async function makeFactory (cb) {
+  var store = corestore(p.join(STORAGE_DIR, '' + idx++), {
+    network: {
+      disable: true
+    }
+  })
+  store.ready(err => {
+    if (err) return cb(err)
+
+    function coreFactory (key, opts) {
+      console.log('GETTING CORE:', key, 'opts:', opts)
+      return store.get(key, opts)
     }
 
-    db = baseDb
-    if (opts.checkout) db = db.checkout(opts.checkout)
+    function dbFactory (key, opts) {
+      console.log('GETTING DB:', key, 'opts:', opts)
+      return hyperdb(coreFactory, key, opts)
+    }
 
-    db.ready(function (err) {
-      if (err) return cb(err)
-      dbs[baseDb.key] = baseDb
-      db.idx = baseDb.idx
-      return cb(null, db)
-    })
-  }
-  return factory
+    return cb(null, dbFactory)
+  })
 }
 
-function fromLayers (layerBatches, cb) {
+async function fromLayers (layerBatches, cb) {
   var dbs = []
   var currentDb = null
   var currentIdx = 0
 
-  // Share hyperdbs between layers.
-  var factory = makeFactory()
-
-  makeNextLayer()
+  var factory
+  makeFactory((err, f) => {
+    if (err) return cb(err)
+    factory = f
+    makeNextLayer()
+  })
 
   function makeNextLayer (err) {
     if (err) return cb(err)
@@ -55,12 +55,12 @@ function fromLayers (layerBatches, cb) {
             key: currentDb.key,
             version: version
           },
-          valueEncoding: 'utf8'
+          valueEncoding: 'utf-8'
         })
       })
     } else {
       return makeUnionDB({
-        valueEncoding: 'utf8'
+        valueEncoding: 'utf-8'
       })
     }
   }
@@ -68,35 +68,38 @@ function fromLayers (layerBatches, cb) {
   function makeUnionDB (opts) {
     var batch = layerBatches[currentIdx++]
     var db = uniondb(factory, null, opts)
-    each(batch, function (cmd, next) {
-      switch (cmd.type) {
-        case 'put':
-          db.put(cmd.key, cmd.value, next)
-          break
-        case 'mount':
-          if (cmd.versioned) {
-            currentDb.version(function (err, version) {
-              if (err) throw err
+    db.ready(err => {
+      if (err) throw err
+      each(batch, function (cmd, next) {
+        switch (cmd.type) {
+          case 'put':
+            db.put(cmd.key, cmd.value, next)
+            break
+          case 'mount':
+            if (cmd.versioned) {
+              currentDb.version(function (err, version) {
+                if (err) throw err
+                db.mount(currentDb.key, cmd.key, {
+                  version: version,
+                  remotePath: cmd.remotePath
+                }, next)
+              })
+            } else {
               db.mount(currentDb.key, cmd.key, {
-                version: version,
                 remotePath: cmd.remotePath
               }, next)
-            })
-          } else {
-            db.mount(currentDb.key, cmd.key, {
-              remotePath: cmd.remotePath
-            }, next)
-          }
-          break
-        case 'delete':
-          db.delete(cmd.key, next)
-          break
-      }
-    }, function (err) {
-      if (err) throw err
-      currentDb = db
-      dbs.push(db)
-      return makeNextLayer()
+            }
+            break
+          case 'delete':
+            db.delete(cmd.key, next)
+            break
+        }
+      }, function (err) {
+        if (err) throw err
+        currentDb = db
+        dbs.push(db)
+        return makeNextLayer()
+      })
     })
   }
 }
@@ -132,8 +135,7 @@ function two (cb) {
 }
 
 module.exports = {
-  fromLayers: fromLayers,
-  twoFromLayers: twoFromLayers,
-  two: two,
-  makeFactory: makeFactory
+  fromLayers,
+  twoFromLayers,
+  two
 }

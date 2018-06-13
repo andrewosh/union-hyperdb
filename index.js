@@ -3,8 +3,6 @@ var EventEmitter = require('events').EventEmitter
 
 var map = require('async-each')
 var each = map
-// var multiplex = require('multiplex')
-// var pump = require('pump')
 var inherits = require('inherits')
 var bulk = require('bulk-write-stream')
 var codecs = require('codecs')
@@ -75,12 +73,7 @@ function UnionDB (factory, key, opts) {
 
   var self = this
 
-  this._ready = new Promise(function (resolve, reject) {
-    open(function (err) {
-      if (err) return reject(err)
-      return resolve()
-    })
-  })
+  this._ready = open()
 
   this.ready = function (cb) {
     if (!cb) return self._ready
@@ -91,27 +84,34 @@ function UnionDB (factory, key, opts) {
     })
   }
 
-  function open (cb) {
-    self._factory(self.key, { checkout: self.localVersion }, function (err, db) {
-      if (err) return cb(err)
-      if (self.key && self.parent) {
-        var error = new Error('Cannot specify both a parent key and layers.')
-        return cb(error)
-      }
-      self._db = db
+  async function open () {
+    if (self.key && self.parent) {
+      var error = new Error('Cannot specify both a parent key and layers.')
+      throw error
+    }
+    let opts = Object.assign({}, self.opts, { valueEncoding: 'binary', version: undefined })
+    let db = factory(self.key, opts)
+    if (self.localVersion) db = db.checkout(self.localVersion, opts)
+    self._db = db
+    return new Promise((resolve, reject) => {
       self._db.ready(function (err) {
-        if (err) return cb(err)
-
+        if (err) return reject(err)
         self.localKey = self._db.local.key
-
         self._db.watch(LINKS_PATH, function () {
-          // Refresh the links whenver any change.
+          // Refresh the links whenever any change.
           return self._loadLinks()
         })
-
-        if (self.key) return self._load(cb)
+        if (self.key) {
+          return self._load(err => {
+            if (err) return reject(err)
+            return resolve()
+          })
+        }
         self.key = db.key
-        return self._save(cb)
+        return self._save(err => {
+          if (err) return reject(err)
+          return resolve()
+        })
       })
     })
   }
@@ -152,6 +152,7 @@ UnionDB.prototype._loadDatabase = function (record, opts, cb) {
   opts = opts || {}
 
   var dbMetadata = (record.db) ? record.db : record
+  console.log('dbMetadata:', dbMetadata)
 
   this._createUnionDB(dbMetadata.key, {
     version: dbMetadata.version,
@@ -161,13 +162,12 @@ UnionDB.prototype._loadDatabase = function (record, opts, cb) {
     if (err) return cb(err)
     record.db = db
     return cb()
-  }, function (err) {
-    return cb(err)
   })
 }
 
 UnionDB.prototype._loadParent = function (cb) {
   if (this.parent) {
+    console.log('LOADING PARENT:', this.parent)
     return this._loadDatabase(this.parent, cb)
   }
   process.nextTick(cb, null)
@@ -239,7 +239,11 @@ UnionDB.prototype._save = function (cb) {
 }
 
 UnionDB.prototype._createUnionDB = function (key, opts, cb) {
-  return cb(null, new UnionDB(this._factory, key, opts))
+  let db = new UnionDB(this._factory, key, opts)
+  db.ready(err => {
+    if (err) return cb(err)
+    return cb(null, db)
+  })
 }
 
 UnionDB.prototype._get = function (idx, key, cb) {
@@ -385,6 +389,7 @@ UnionDB.prototype.mount = function (key, path, opts, cb) {
 }
 
 UnionDB.prototype.get = function (key, opts, cb) {
+  console.log('TOP-LEVEL GETTING:', key, 'self.key:', this._db.key)
   if (typeof opts === 'function') return this.get(key, {}, opts)
 
   var self = this
@@ -399,12 +404,15 @@ UnionDB.prototype.get = function (key, opts, cb) {
     }
 
     // Else, first check this database, then recurse into parents.
+    console.log('CHECKING DB')
     self._db.get(p.join(INDEX_PATH, key), function (err, nodes) {
       if (err) return cb(err)
       if ((!nodes || !nodes.length) && self.parent) {
+        console.log('GOING INTO PARENT')
         return self.parent.db.get(key, opts, cb)
       }
 
+      console.log('nodes:', nodes)
       if (!nodes || !nodes.length) return cb(null, null)
 
       var entries = nodes.map(function (node) {
@@ -435,6 +443,7 @@ UnionDB.prototype.put = function (key, value, cb) {
 
   this._ready.then(function () {
     // If there's a link, recurse into the linked db.
+    console.log('PUTTING KEY:', key, 'self.key:', self._db.key)
     var link = self._linkTrie.get(key, { enclosing: true })
     if (link) {
       return link.db.put(key.slice(link.localPath), value, cb)
@@ -657,11 +666,7 @@ UnionDB.prototype.fork = function (cb) {
         version: version
       }
     }))
-    fork.ready().then(function () {
-      return cb(null, fork)
-    }).catch(function (err) {
-      return cb(err)
-    })
+    fork.ready(cb)
   }
 }
 
@@ -693,6 +698,7 @@ UnionDB.prototype.version = function (cb) {
           linkVersions[lak.path] = lak.version
         })
 
+        console.log('dbVersion:', dbVersion)
         return cb(null, messages.Version.encode({
           localVersion: dbVersion,
           linkVersions: linkVersions
