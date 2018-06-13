@@ -19,12 +19,10 @@ async function makeFactory (cb) {
     if (err) return cb(err)
 
     function coreFactory (key, opts) {
-      console.log('GETTING CORE:', key, 'opts:', opts)
       return store.get(key, opts)
     }
 
     function dbFactory (key, opts) {
-      console.log('GETTING DB:', key, 'opts:', opts)
       return hyperdb(coreFactory, key, opts)
     }
 
@@ -127,7 +125,6 @@ function two (cb) {
     if (err) return cb(err)
     makeFactory((err, f2) => {
       if (err) return cb(err)
-      console.log('CALLING FINISH IN TWO')
       finish(f1, f2)
     })
   })
@@ -135,9 +132,7 @@ function two (cb) {
   function finish (f1, f2) {
     var db1 = uniondb(f1, { valueEncoding: 'utf8' })
     db1.ready(err => {
-      console.log('DB1 IS READY')
       if (err) return cb(err)
-      console.log('DB1.KEY:', db1.key)
       var db2 = uniondb(f2, db1.key, { valueEncoding: 'utf8' })
       // db2 will not be ready until the first remote-update.
       return cb(null, db1, db2)
