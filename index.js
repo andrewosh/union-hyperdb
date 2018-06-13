@@ -239,6 +239,7 @@ UnionDB.prototype._save = function (cb) {
 }
 
 UnionDB.prototype._createUnionDB = function (key, opts, cb) {
+  console.log('CREATING UNIONDB WITH OPTS:', opts)
   let db = new UnionDB(this._factory, key, opts)
   db.ready(err => {
     if (err) return cb(err)
@@ -656,18 +657,13 @@ UnionDB.prototype.fork = function (cb) {
 
   this.version(function (err, version) {
     if (err) return cb(err)
-    return finalize(version)
-  })
-
-  function finalize (version) {
-    var fork = UnionDB(self._factory, null, Object.assign(self.opts, {
+    self._createUnionDB(null, Object.assign({}, self.opts, {
       parent: {
         key: self.key,
         version: version
       }
-    }))
-    fork.ready(cb)
-  }
+    }), cb)
+  })
 }
 
 UnionDB.prototype.authorize = function (key) {
