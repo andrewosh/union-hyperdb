@@ -90,24 +90,28 @@ function UnionDB (factory, key, opts) {
       throw error
     }
     let opts = Object.assign({}, self.opts, { valueEncoding: 'binary', version: undefined })
+    console.log('CREATING HYPERDB WITH KEY:', self.key, 'opts:', opts, 'localVersion:', self.localVersion)
     let db = factory(self.key, opts)
     if (self.localVersion) db = db.checkout(self.localVersion, opts)
     self._db = db
     return new Promise((resolve, reject) => {
       self._db.ready(function (err) {
         if (err) return reject(err)
+        console.log('self._db is ready')
         self.localKey = self._db.local.key
         self._db.watch(LINKS_PATH, function () {
           // Refresh the links whenever any change.
           return self._loadLinks()
         })
         if (self.key) {
+          console.log('loading')
           return self._load(err => {
             if (err) return reject(err)
             return resolve()
           })
         }
         self.key = db.key
+        console.log('saving')
         return self._save(err => {
           if (err) return reject(err)
           return resolve()
@@ -123,7 +127,9 @@ UnionDB.prototype._getMetadata = function (cb) {
 
   this._db.ready(function (err) {
     if (err) return cb(err)
+    console.log('GETTING META_PATH')
     self._db.get(META_PATH, function (err, nodes) {
+      console.log('GOT META PATH')
       if (err) return cb(err)
       if (!nodes || !nodes.length) return cb(null, null)
       if (nodes.length > 1) console.error('Conflict in metadata file -- using first node\'s value.')
@@ -216,11 +222,14 @@ UnionDB.prototype._loadLinks = function (cb) {
 UnionDB.prototype._load = function (cb) {
   var self = this
 
+  console.log('GETTING METADATA')
   this._getMetadata(function (err, metadata) {
+    console.log('GOT METADATA')
     if (err) return cb(err)
     if (!metadata) return cb()
     // TODO: handle the case of multiple parents? (i.e. a merge)
     self.parent = metadata.parents[0]
+    console.log('LOADING PARENT')
     self._loadParent(function (err) {
       if (err) return cb(err)
       return self._loadLinks(cb)
@@ -401,6 +410,7 @@ UnionDB.prototype.get = function (key, opts, cb) {
     if (link) {
       var remotePath = p.resolve(key.slice(link.localPath.length))
       if (link.remotePath) remotePath = p.resolve(p.join(link.remotePath, remotePath))
+      console.log('link:', link)
       return link.db.get(remotePath, opts, cb)
     }
 

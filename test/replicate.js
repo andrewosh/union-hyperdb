@@ -5,20 +5,17 @@ var create = require('./helpers/create')
 var verify = require('./helpers/verify')
 
 test('should replicate without any layers', function (t) {
-  t.plan(5 + 3 * 1)
+  t.plan(3 + 3 * 1)
 
   create.two(function (err, db1, db2) {
     t.error(err)
+    console.log('HERERR')
     db1.put('cat', 'dog', function (err) {
       t.error(err)
-      db2.get('cat', function (err, contents) {
+      replicate(db1, db2, function (err) {
         t.error(err)
-        t.same(contents, null)
-        replicate(db1, db2, function (err) {
-          t.error(err)
-          verify.values(t, db2, {
-            'cat': 'dog'
-          })
+        verify.values(t, db2, {
+          'cat': 'dog'
         })
       })
     })
@@ -26,7 +23,7 @@ test('should replicate without any layers', function (t) {
 })
 
 test('should replicate between two databases with no local changes', function (t) {
-  t.plan(4 + 3 * 2)
+  t.plan(2 + 3 * 2)
 
   create.twoFromLayers([
     [
@@ -35,15 +32,11 @@ test('should replicate between two databases with no local changes', function (t
     ]
   ], function (err, db1, db2) {
     t.error(err)
-    db2.get('cat', function (err, contents) {
+    replicate(db1, db2, function (err) {
       t.error(err)
-      t.same(contents, null)
-      replicate(db1, db2, function (err) {
-        t.error(err)
-        verify.values(t, db2, {
-          'cat': 'dog',
-          'hello': 'goodbye'
-        })
+      verify.values(t, db2, {
+        'cat': 'dog',
+        'hello': 'goodbye'
       })
     })
   })

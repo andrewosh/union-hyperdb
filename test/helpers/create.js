@@ -113,18 +113,13 @@ function twoFromLayers (layerFiles, cb) {
   function finish (f1) {
     fromLayers(layerFiles, function (err, db1) {
       if (err) return cb(err)
-      db1.ready().then(function () {
+      db1.ready(err => {
+        if (err) return cb(err)
         var db2 = uniondb(f1, db1.key, { valueEncoding: 'utf8' })
-        db2.ready().then(function () {
-          return cb(null, db1, db2)
-        }).catch(function (err) {
-          return cb(err)
-        })
-      }).catch(function (err) {
-        return cb(err)
+        return cb(null, db1, db2)
       })
     })
-  })
+  }
 }
 
 function two (cb) {
@@ -132,21 +127,20 @@ function two (cb) {
     if (err) return cb(err)
     makeFactory((err, f2) => {
       if (err) return cb(err)
+      console.log('CALLING FINISH IN TWO')
       finish(f1, f2)
     })
   })
 
   function finish (f1, f2) {
     var db1 = uniondb(f1, { valueEncoding: 'utf8' })
-    db1.ready().then(function () {
+    db1.ready(err => {
+      console.log('DB1 IS READY')
+      if (err) return cb(err)
+      console.log('DB1.KEY:', db1.key)
       var db2 = uniondb(f2, db1.key, { valueEncoding: 'utf8' })
-      db2.ready().then(function () {
-        return cb(null, db1, db2)
-      }).catch(function (err) {
-        return cb(err)
-      })
-    }).catch(function (err) {
-      return cb(err)
+      // db2 will not be ready until the first remote-update.
+      return cb(null, db1, db2)
     })
   }
 }
