@@ -15,11 +15,12 @@
   "devDependencies": {
     "@andrewosh/hyperdb": "^3.0.0",
     "random-access-memory": "^2.4.0",
+    "rimraf": "^2.6.2",
     "standard": "^10.0.3",
     "tape": "^4.8.0"
   },
   "scripts": {
-    "test": "standard && tape test/*.js"
+    "test": "standard && tape test/*.js && rimraf test/test-storage"
   },
   "keywords": [
     "hyperdb",

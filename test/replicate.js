@@ -9,7 +9,6 @@ test('should replicate without any layers', function (t) {
 
   create.two(function (err, db1, db2) {
     t.error(err)
-    console.log('HERERR')
     db1.put('cat', 'dog', function (err) {
       t.error(err)
       replicate(db1, db2, function (err) {
