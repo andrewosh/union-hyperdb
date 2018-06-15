@@ -374,7 +374,6 @@ UnionDB.prototype._getIndex = function (cb) {
 }
 
 UnionDB.prototype._getEntryValues = function (key, nodes, cb) {
-  console.log('NODES:', nodes)
   var entries = nodes.map(function (node) {
     return messages.Entry.decode(node.value)
   })
@@ -384,8 +383,6 @@ UnionDB.prototype._getEntryValues = function (key, nodes, cb) {
     this.emit('conflict', key, entries)
   }
   var resolvedEntry = resolveEntryConflicts(entries)
-
-  console.log('RESOLVED ENTRY:', resolvedEntry, 'key:', key)
 
   if (resolvedEntry.deleted) {
     return cb(null, null)
@@ -604,7 +601,6 @@ UnionDB.prototype.list = function (dir, cb) {
  */
 UnionDB.prototype.lexIterator = function (opts) {
   // TODO: Support for non-indexed dbs.
-  console.log('LEX ITERATOR OPTS:', opts)
 
   var self = this
   opts = opts || {}
@@ -619,14 +615,18 @@ UnionDB.prototype.lexIterator = function (opts) {
       if (err) return cb(err)
       if (!nodes) return cb(null, null)
       if (link) {
-        nodes.forEach(n => n.key = p.join(link.localPath, n.key.slice(link.remotePath.length - 1)))
+        nodes.forEach(function (n) {
+          n.key = p.join(link.localPath, n.key.slice(link.remotePath.length - 1))
+        })
         return cb(null, nodes)
       }
       self._getEntryValues(nodes[0].key.slice(INDEX_PATH.length), nodes, (err, values) => {
         if (err) return cb(err)
         // If this is a deletion, get the next value.
         if (!values) return next(cb)
-        values.forEach(v => v.key = v.key.slice(DATA_PATH.length))
+        values.forEach(function (v) {
+          v.key = v.key.slice(DATA_PATH.length)
+        })
         return cb(null, values)
       })
     })

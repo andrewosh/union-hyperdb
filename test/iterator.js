@@ -36,7 +36,6 @@ test('multiple layer iteration fails without indexing', t => {
     ]
   ], (err, db) => {
     t.error(err)
-    let keys = ['a', 'b', 'd', 'f', 'z']
     let ite = db.lexIterator()
     ite.next((err, value) => {
       t.true(err)
@@ -49,7 +48,7 @@ test('can iterate over local values in multiple layers', t => {
   create.fromLayers([
     [
       { type: 'put', key: 'a', value: 'hello' },
-      { type: 'put', key: 'z', value: 'world' },
+      { type: 'put', key: 'z', value: 'world' }
     ],
     [
       { type: 'put', key: 'b', value: 'goodbye' },
@@ -74,7 +73,7 @@ test('can iterate within a single symlink', t => {
     [
       { type: 'put', key: 'z', value: 'hello' },
       { type: 'put', key: 'a', value: 'there' },
-      { type: 'put', key: 'f', value: 'goodbye' },
+      { type: 'put', key: 'f', value: 'goodbye' }
     ],
     [
       { type: 'mount', key: 'b', remotePath: '/' },
@@ -101,7 +100,6 @@ function testIteratorOrder (t, reverse, iterator, expected, done) {
   each(iterator, onEach, onDone)
   function onEach (err, node) {
     t.error(err, 'no error')
-    console.log('NODE:', node)
     var key = node.key || node[0].key
     t.same(key, sorted.shift())
   }
