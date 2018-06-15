@@ -48,9 +48,17 @@ function UnionDB (factory, key, opts) {
     return new UnionDB(factory, null, opts)
   }
 
-  this.opts = opts || {}
+  this.opts = Object.assign({}, opts || {})
   this.parent = this.opts.parent
   this.key = key
+  if (this.opts.map) {
+    this.map = this.opts.map
+    delete this.opts.map
+  }
+  if (this.opts.reduce) {
+    this.reduce = this.opts.reduce
+    delete this.opts.reduce
+  }
 
   if (this.opts.version) {
     this.versions = messages.Version.decode(this.opts.version)
