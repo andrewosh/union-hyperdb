@@ -121,6 +121,17 @@ function twoFromLayers (layerFiles, cb) {
   }
 }
 
+function one (opts, cb) {
+  makeFactory((err, f1) => {
+    if (err) return cb(err)
+    let db1 = uniondb(f1, Object.assign(opts, { valueEncoding: 'utf-8' }))
+    db1.ready(err => {
+      if (err) return cb(err)
+      return cb(null, db1)
+    })
+  })
+}
+
 function two (cb) {
   makeFactory((err, f1) => {
     if (err) return cb(err)
@@ -144,5 +155,6 @@ function two (cb) {
 module.exports = {
   fromLayers,
   twoFromLayers,
-  two
+  two,
+  one
 }

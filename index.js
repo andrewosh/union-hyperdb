@@ -253,6 +253,12 @@ UnionDB.prototype._createUnionDB = function (key, opts, cb) {
   })
 }
 
+UnionDB.prototype._prereturn = function (result) {
+  if (this.map) result = result.map(n => this.map(n))
+  if (this.reduce) result = result.reduce(this.reduce)
+  return result
+}
+
 UnionDB.prototype._get = function (idx, key, cb) {
   var self = this
 
@@ -266,7 +272,7 @@ UnionDB.prototype._get = function (idx, key, cb) {
           node.value = self._codec.decode(node.value)
         })
       }
-      return cb(null, nodes)
+      return cb(null, self._prereturn(nodes))
     })
   }
   return this.parent.db._get(idx - 1, key, cb)
