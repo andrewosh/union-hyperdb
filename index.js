@@ -6,6 +6,7 @@ var each = map
 var inherits = require('inherits')
 var bulk = require('bulk-write-stream')
 var codecs = require('codecs')
+var nanoiterator = require('nanoiterator')
 
 var Trie = require('./lib/trie')
 var messages = require('./lib/messages')
@@ -372,6 +373,26 @@ UnionDB.prototype._getIndex = function (cb) {
   }
 }
 
+UnionDB.prototype._getEntryValues = function (key, nodes, cb) {
+  console.log('NODES:', nodes)
+  var entries = nodes.map(function (node) {
+    return messages.Entry.decode(node.value)
+  })
+
+  // If there are any conflicting entries, resolve them according to the the strategy above.
+  if (entries.length > 1) {
+    this.emit('conflict', key, entries)
+  }
+  var resolvedEntry = resolveEntryConflicts(entries)
+
+  console.log('RESOLVED ENTRY:', resolvedEntry, 'key:', key)
+
+  if (resolvedEntry.deleted) {
+    return cb(null, null)
+  }
+  return this._get(resolvedEntry.layerIndex, key, cb)
+}
+
 // BEGIN Public API
 
 UnionDB.prototype.mount = function (key, path, opts, cb) {
@@ -405,25 +426,9 @@ UnionDB.prototype.get = function (key, opts, cb) {
         return self.parent.db.get(key, opts, cb)
       }
 
-      if (!nodes || !nodes.length) return cb(null, null)
+      if (!nodes || !nodes.length) return cb(null)
 
-      var entries = nodes.map(function (node) {
-        return messages.Entry.decode(node.value)
-      })
-
-      // If there are any conflicting entries, resolve them according to the the strategy above.
-      if (entries.length > 1) {
-        self.emit('conflict', key, entries)
-      }
-      var resolvedEntry = resolveEntryConflicts(entries)
-
-      if (resolvedEntry.deleted) {
-        return cb(null, null)
-      } else if (resolvedEntry.layerIndex === 0) {
-        return self._get(0, key, cb)
-      } else {
-        return self._get(resolvedEntry.layerIndex, key, cb)
-      }
+      return self._getEntryValues(key, nodes, cb)
     })
   }).catch(function (err) {
     return cb(err)
@@ -551,7 +556,7 @@ UnionDB.prototype._findEntries = function (dir, cb) {
 UnionDB.prototype._list = function (prefix, dir, cb) {
   var self = this
 
-  self._isIndexed(function (err, indexed) {
+  this._isIndexed(function (err, indexed) {
     if (err) return cb(err)
     if (!indexed && self.parent) {
       self.parent.db.ready().then(function () {
@@ -591,6 +596,84 @@ UnionDB.prototype.list = function (dir, cb) {
   }).catch(function (err) {
     return cb(err)
   })
+}
+
+/**
+ * TODO: this will currently not traverse into symlinks *during* iteration. If the entire range
+ * is contained within a symlink, then that will still work.
+ */
+UnionDB.prototype.lexIterator = function (opts) {
+  // TODO: Support for non-indexed dbs.
+
+  var self = this
+  opts = opts || {}
+
+  var ite = null
+  var inLink = false
+
+  return nanoiterator({ next, open })
+
+  function next (cb) {
+    ite.next((err, nodes) => {
+      if (err) return cb(err)
+      if (!nodes) return cb(null, null)
+      if (inLink) return cb(null, nodes)
+      console.log('NEXT NODES:', nodes)
+      self._getEntryValues(nodes[0].key.slice(INDEX_PATH.length), nodes, (err, values) => {
+        if (err) return cb(err)
+        console.log('VALUES:', values)
+        // If this is a deletion, get the next value.
+        if (!values) return next(cb)
+        values.forEach(v => v.key = v.key.slice(DATA_PATH.length))
+        return cb(null, values)
+      })
+    })
+  }
+
+  function open (cb) {
+    self._isIndexed((err, indexed) => {
+      if (err) return cb(err)
+      if (!indexed) return cb(new Error('Can only iterate over an indexed database'))
+
+      // Check if this iteration is contained within a symlink.
+      let end = opts.lt || opts.lte
+      let start = opts.gt || opts.gte
+      let startLink = start && self._linkTrie.get(start, { enclosing: true })
+      let endLink = end && self._linkTrie.get(end, { enclosing: true })
+      if (startLink && endLink) {
+        if (!startLink.db.key.equals(endLink.db.key)) {
+          return cb(new Error('Cannot iterate across multiple different symlinks'))
+        }
+        inLink = true
+        ite = startLink.db.lexIterator(fixPaths(startLink.remotePath, opts))
+        return cb(null)
+      } else if (startLink || endLink) {
+        return cb(new Error('Cannot currently iterate both locally and through symlinks'))
+      }
+
+      fixPaths(INDEX_PATH, opts)
+      ite = self._db.lexIterator(opts)
+      return cb(null)
+    })
+  }
+
+  function fixPaths (base, opts) {
+    if (opts.lt) opts.lt = p.join(base, opts.lt)
+    if (opts.gt) opts.gt = p.join(base, opts.gt)
+    if (opts.gte) opts.gte = p.join(base, opts.gte)
+    if (opts.lte) opts.lte = p.join(base, opts.lte)
+    if (!opts.gt && !opts.gte) opts.gt = base
+
+    // If no lt or lte is specified, ensure that the iterator doesn't leave the 'base' subtree.
+    if (!opts.lt && !opts.lte) {
+      let lastChar = base.charCodeAt[base.length - 1]
+      let lt = base
+      lt[lt.length - 1] = lastChar + 1
+      opts.lt = lt
+    }
+
+    return opts
+  }
 }
 
 UnionDB.prototype.watch = function (key, onchange) {

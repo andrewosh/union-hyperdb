@@ -9,6 +9,7 @@
     "cmp": "0.0.2",
     "codecs": "^1.2.0",
     "duplexify": "^3.5.3",
+    "nanoiterator": "^1.2.0",
     "protocol-buffers": "^4.0.2",
     "thunky": "^1.0.2"
   },

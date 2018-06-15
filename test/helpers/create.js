@@ -23,6 +23,7 @@ async function makeFactory (cb) {
     }
 
     function dbFactory (key, opts) {
+      opts.lex = true
       return hyperdb(coreFactory, key, opts)
     }
 
