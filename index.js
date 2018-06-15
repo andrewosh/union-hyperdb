@@ -503,7 +503,7 @@ UnionDB.prototype.createWriteStream = function () {
   }
 }
 
-UnionDB.prototype.delete = function (key, cb) {
+UnionDB.prototype.del = function (key, cb) {
   var self = this
 
   this._ready.then(function () {

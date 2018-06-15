@@ -53,7 +53,7 @@ test('put/get with two layers and a deletion', function (t) {
     ]
   ], function (err, db) {
     t.error(err)
-    db.delete('a', function (err) {
+    db.del('a', function (err) {
       t.error(err)
       db.list('/', function (err, l) {
         t.error(err)
