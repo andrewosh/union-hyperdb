@@ -14,7 +14,8 @@
     "thunky": "^1.0.2"
   },
   "devDependencies": {
-    "@andrewosh/hyperdb": "^3.0.0",
+    "hyperdb": "andrewosh/hyperdb#ready-for-typed-hyperdb",
+    "corestore": "andrewosh/corestore",
     "random-access-memory": "^2.4.0",
     "rimraf": "^2.6.2",
     "standard": "^10.0.3",
