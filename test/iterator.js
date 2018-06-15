@@ -28,7 +28,9 @@ test('multiple layer iteration fails without indexing', t => {
     [
       { type: 'put', key: 'a', value: 'hello' },
       { type: 'put', key: 'z', value: 'world' },
-      { type: 'put', key: 'b', value: 'goodbye' },
+      { type: 'put', key: 'b', value: 'goodbye' }
+    ],
+    [
       { type: 'put', key: 'd', value: 'dog' },
       { type: 'put', key: 'f', value: 'yes' }
     ]
@@ -67,7 +69,29 @@ test('can iterate over local values in multiple layers', t => {
   })
 })
 
-test('can iterate within a single symlink')
+test('can iterate within a single symlink', t => {
+  create.fromLayers([
+    [
+      { type: 'put', key: 'z', value: 'hello' },
+      { type: 'put', key: 'a', value: 'there' },
+      { type: 'put', key: 'f', value: 'goodbye' },
+    ],
+    [
+      { type: 'mount', key: 'b', remotePath: '/' },
+      { type: 'put', key: 'c', value: 'goodbye' }
+    ]
+  ], (err, db) => {
+    t.error(err)
+    db.index(err => {
+      t.error(err)
+      let keys = ['b/a', 'b/f', 'b/z']
+      testIteratorOrder(t, false, db.lexIterator({ gt: 'b', lt: 'b/zz' }), keys, err => {
+        t.error(err)
+        t.end()
+      })
+    })
+  })
+})
 
 // Copied from hyperdb
 

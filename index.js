@@ -604,12 +604,13 @@ UnionDB.prototype.list = function (dir, cb) {
  */
 UnionDB.prototype.lexIterator = function (opts) {
   // TODO: Support for non-indexed dbs.
+  console.log('LEX ITERATOR OPTS:', opts)
 
   var self = this
   opts = opts || {}
 
   var ite = null
-  var inLink = false
+  var link = null
 
   return nanoiterator({ next, open })
 
@@ -617,11 +618,12 @@ UnionDB.prototype.lexIterator = function (opts) {
     ite.next((err, nodes) => {
       if (err) return cb(err)
       if (!nodes) return cb(null, null)
-      if (inLink) return cb(null, nodes)
-      console.log('NEXT NODES:', nodes)
+      if (link) {
+        nodes.forEach(n => n.key = p.join(link.localPath, n.key.slice(link.remotePath.length - 1)))
+        return cb(null, nodes)
+      }
       self._getEntryValues(nodes[0].key.slice(INDEX_PATH.length), nodes, (err, values) => {
         if (err) return cb(err)
-        console.log('VALUES:', values)
         // If this is a deletion, get the next value.
         if (!values) return next(cb)
         values.forEach(v => v.key = v.key.slice(DATA_PATH.length))
@@ -633,7 +635,7 @@ UnionDB.prototype.lexIterator = function (opts) {
   function open (cb) {
     self._isIndexed((err, indexed) => {
       if (err) return cb(err)
-      if (!indexed) return cb(new Error('Can only iterate over an indexed database'))
+      if (!indexed && self.parent) return cb(new Error('Can only iterate over an indexed database'))
 
       // Check if this iteration is contained within a symlink.
       let end = opts.lt || opts.lte
@@ -644,24 +646,24 @@ UnionDB.prototype.lexIterator = function (opts) {
         if (!startLink.db.key.equals(endLink.db.key)) {
           return cb(new Error('Cannot iterate across multiple different symlinks'))
         }
-        inLink = true
-        ite = startLink.db.lexIterator(fixPaths(startLink.remotePath, opts))
+        link = startLink
+        ite = startLink.db.lexIterator(fixPaths(startLink.remotePath, startLink.localPath, opts))
         return cb(null)
       } else if (startLink || endLink) {
         return cb(new Error('Cannot currently iterate both locally and through symlinks'))
       }
 
-      fixPaths(INDEX_PATH, opts)
+      fixPaths(INDEX_PATH, '', opts)
       ite = self._db.lexIterator(opts)
       return cb(null)
     })
   }
 
-  function fixPaths (base, opts) {
-    if (opts.lt) opts.lt = p.join(base, opts.lt)
-    if (opts.gt) opts.gt = p.join(base, opts.gt)
-    if (opts.gte) opts.gte = p.join(base, opts.gte)
-    if (opts.lte) opts.lte = p.join(base, opts.lte)
+  function fixPaths (base, local, opts) {
+    if (opts.lt) opts.lt = p.join(base, opts.lt.slice(local.length))
+    if (opts.gt) opts.gt = p.join(base, opts.gt.slice(local.length))
+    if (opts.gte) opts.gte = p.join(base, opts.gte.slice(local.length))
+    if (opts.lte) opts.lte = p.join(base, opts.lte.slice(local.length))
     if (!opts.gt && !opts.gte) opts.gt = base
 
     // If no lt or lte is specified, ensure that the iterator doesn't leave the 'base' subtree.
