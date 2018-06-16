@@ -714,13 +714,13 @@ UnionDB.prototype.watch = function (key, onchange) {
 
   // Check to see if there are any links that are prefixed by `key`. If so, watch each
   // one and propagate any changes through `onchange`
-  var watchFuncs = {}
+  var watchers = []
 
   // TODO: remove a watch if its corresponding link is deleted.
   // TODO: add a watch if a link is added to a watched directory (currently will have to re-watch).
   Object.keys(self._links).forEach(watchLink)
 
-  watchFuncs.push(this._db.watch(p.join(DATA_PATH, key), function change (nodes) {
+  watchers.push(this._db.watch(p.join(DATA_PATH, key), function change (nodes) {
     return onchange(nodes.map(function (node) {
       node.key = node.key.slice(DATA_PATH.length)
       return node
@@ -730,8 +730,9 @@ UnionDB.prototype.watch = function (key, onchange) {
   return unwatch
 
   function unwatch () {
-    watchFuncs.forEach(function (func) {
-      func()
+    watchers.forEach(function (watcher) {
+      if (watcher.destroy) watcher.destroy()
+      else watcher()
     })
   }
 
@@ -741,7 +742,7 @@ UnionDB.prototype.watch = function (key, onchange) {
       var suffix = key.slice(linkKey.length)
       var linkRecord = self._links[linkKey]
 
-      watchFuncs.push(linkRecord.db.watch((suffix === '') ? '/' : suffix, function change (nodes) {
+      watchers.push(linkRecord.db.watch((suffix === '') ? '/' : suffix, function change (nodes) {
         return onchange(nodes.map(function (node) {
           node.key = p.join(prefix, node.key)
           return node
