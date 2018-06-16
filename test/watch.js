@@ -9,7 +9,7 @@ test('should emit changes to watch functions', t => {
     ]
   ], function (err, db) {
     t.error(err)
-    var unwatch = db.watch('/', (nodes) => {
+    db.watch('/', (nodes) => {
       t.true(nodes.length)
       t.same(nodes[0].key, 'a')
       t.end()
@@ -31,7 +31,7 @@ test('should emit changes in symlinks to watch functions', t => {
     ]
   ], function (err, db) {
     t.error(err)
-    var unwatch = db.watch('b', (nodes) => {
+    db.watch('b', (nodes) => {
       t.true(nodes.length)
       t.same(nodes[0].key, 'b/d')
       t.end()
