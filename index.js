@@ -488,7 +488,17 @@ UnionDB.prototype.batch = function (records, cb) {
       return stat
     })
     var toBatch = records.concat(stats)
-    return self._db.batch(toBatch, cb)
+    return self._db.batch(toBatch, (err, nodes) => {
+      if (err) return cb(err)
+      nodes.forEach(n => {
+        if (n.key.startsWith(INDEX_PATH)) {
+          n.key = n.key.slice(INDEX_PATH.length)
+        } else if (n.key.startsWith(DATA_PATH)) {
+          n.key = n.key.slice(DATA_PATH.length)
+        }
+      })
+      return cb(null, nodes)
+    })
   }).catch(function (err) {
     return cb(err)
   })
@@ -637,10 +647,17 @@ UnionDB.prototype.lexIterator = function (opts) {
       self._getEntryValues(nodes[0].key.slice(INDEX_PATH.length), nodes, (err, values) => {
         if (err) return cb(err)
         // If this is a deletion, get the next value.
+        if (values.length) {
+          // Remove deletions
+          values = values.filter(v => !!v.value)
+          values.forEach(function (v) {
+            v.key = v.key.slice(DATA_PATH.length)
+          })
+        } else {
+          values.key = values.key.slice(DATA_PATH.length)
+          if (!values.value) values = null
+        }
         if (!values) return next(cb)
-        values.forEach(function (v) {
-          v.key = v.key.slice(DATA_PATH.length)
-        })
         return cb(null, values)
       })
     })
@@ -751,6 +768,13 @@ UnionDB.prototype.fork = function (cb) {
       }
     }), cb)
   })
+}
+
+/**
+ * TODO: should snapshot just fork?
+ */
+UnionDB.prototype.snapshot = function (cb) {
+  return this.fork(cb)
 }
 
 UnionDB.prototype.authorize = function (key) {
