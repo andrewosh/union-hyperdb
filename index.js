@@ -71,6 +71,7 @@ function UnionDB (factory, key, opts) {
   this._codec = (this.opts.valueEncoding) ? codecs(this.opts.valueEncoding) : null
   this._links = {}
   this._linkTrie = new Trie()
+  this._changeHandlers = []
   this._factory = factory
 
   // Indexing the layers will record which layer last modified each entry (for faster lookups).
@@ -517,8 +518,20 @@ UnionDB.prototype.del = function (key, cb) {
   var self = this
 
   this._ready.then(function () {
-    self._putIndex(key, 0, true, function (err) {
-      return cb(err)
+    self.get(key, (err, nodes) => {
+      if (err) return cb(err)
+      self._putIndex(key, 0, true, function (err) {
+        if (err) return cb(err)
+        nodes.forEach(n => {
+          n.key = n.key.slice(DATA_PATH.length)
+          n.value = null
+          n.deleted = true
+        })
+        self._changeHandlers.forEach(ch => {
+          ch(nodes)
+        })
+        return cb(err)
+      })
     })
   }).catch(function (err) {
     return cb(err)
@@ -727,9 +740,12 @@ UnionDB.prototype.watch = function (key, onchange) {
     }))
   }))
 
+  self._changeHandlers.push(onchange)
+
   return unwatch
 
   function unwatch () {
+    self._changeHandlers.splice(self._changeHandlers.indexOf(onchange), 1)
     watchers.forEach(function (watcher) {
       if (watcher.destroy) watcher.destroy()
       else watcher()

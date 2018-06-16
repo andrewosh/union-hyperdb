@@ -20,6 +20,25 @@ test('should emit changes to watch functions', t => {
   })
 })
 
+test('should emit deletions', t => {
+  create.fromLayers([
+    [
+      { type: 'put', key: '/a', value: 'hello' },
+      { type: 'put', key: '/b', value: 'goodbye' }
+    ]
+  ], function (err, db) {
+    t.error(err)
+    db.watch('/', (nodes) => {
+      t.true(nodes.length)
+      t.same(nodes[0].key, 'a')
+      t.end()
+    })
+    db.del('a', function (err) {
+      t.error(err)
+    })
+  })
+})
+
 test('should emit changes in symlinks to watch functions', t => {
   create.fromLayers([
     [
