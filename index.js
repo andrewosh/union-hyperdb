@@ -205,13 +205,12 @@ UnionDB.prototype._loadLinks = function (cb) {
         linkRecord.db.version = self.linkVersions[linkRecord.localPath]
       }
 
-      self._linkTrie.add(linkRecord.localPath, linkRecord, {
-        push: !!linkRecord.flat
-      })
-
       self._loadDatabase(linkRecord, { sparse: true }, function (err) {
-        if (err) return cb(err)
+        if (err) return next(err)
         self._links[linkId] = linkRecord
+        self._linkTrie.add(linkRecord.localPath, linkRecord, {
+          push: !!linkRecord.flat
+        })
         return next()
       })
     }, function (err) {
@@ -418,7 +417,8 @@ UnionDB.prototype.mount = function (key, path, opts, cb) {
 }
 
 UnionDB.prototype.get = function (key, opts, cb) {
-  if (typeof opts === 'function') return this.get(key, {}, opts)
+  if (typeof opts === 'function') return this.get(key, null, opts)
+  opts = opts || {}
 
   var self = this
 
@@ -522,15 +522,20 @@ UnionDB.prototype.del = function (key, cb) {
       if (err) return cb(err)
       self._putIndex(key, 0, true, function (err) {
         if (err) return cb(err)
-        nodes.forEach(n => {
-          n.key = n.key.slice(DATA_PATH.length)
-          n.value = null
-          n.deleted = true
+        self._db.del(p.join(DATA_PATH, key), err => {
+          if (err) return cb(err)
+          nodes.forEach(n => {
+            n.key = n.key.slice(DATA_PATH.length)
+            n.value = null
+            n.deleted = true
+          })
+          /*
+          self._changeHandlers.forEach(ch => {
+            ch(nodes)
+          })
+          */
+          return cb(err)
         })
-        self._changeHandlers.forEach(ch => {
-          ch(nodes)
-        })
-        return cb(err)
       })
     })
   }).catch(function (err) {
@@ -638,7 +643,6 @@ UnionDB.prototype.list = function (dir, cb) {
  */
 UnionDB.prototype.lexIterator = function (opts) {
   // TODO: Support for non-indexed dbs.
-
   var self = this
   opts = opts || {}
 
@@ -722,6 +726,9 @@ UnionDB.prototype.lexIterator = function (opts) {
   }
 }
 
+UnionDB.prototype.createDiffStream = function (prefix, checkout) {
+}
+
 UnionDB.prototype.watch = function (key, onchange) {
   var self = this
 
@@ -773,25 +780,32 @@ UnionDB.prototype.replicate = function (opts) {
   return self._db.replicate(opts)
 }
 
-UnionDB.prototype.fork = function (cb) {
+UnionDB.prototype.fork = function (opts, cb) {
+  if (typeof opts === 'function') return this.fork(null, opts)
+  opts = opts || {}
   var self = this
 
+  if (opts.version) return process.nextTick(finish, opts.version)
   this.version(function (err, version) {
     if (err) return cb(err)
+    finish(version)
+  })
+
+  function finish (version) {
     self._createUnionDB(null, Object.assign({}, self.opts, {
       parent: {
         key: self.key,
         version: version
       }
     }), cb)
-  })
+  }
 }
 
 /**
  * TODO: should snapshot just fork?
  */
-UnionDB.prototype.snapshot = function (cb) {
-  return this.fork(cb)
+UnionDB.prototype.snapshot = function (opts, cb) {
+  return this.fork(opts, cb)
 }
 
 UnionDB.prototype.authorize = function (key) {

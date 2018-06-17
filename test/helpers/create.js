@@ -97,7 +97,7 @@ async function fromLayers (layerBatches, cb) {
         if (err) throw err
         currentDb = db
         dbs.push(db)
-        return makeNextLayer()
+        process.nextTick(makeNextLayer)
       })
     })
   }
