@@ -86,9 +86,66 @@ test('diff between versions, no links', t => {
       t.end()
     })
   }
-
 })
 
+test('diff with links', t => {
+  var version
+  create.fromLayers([
+    [
+      { type: 'put', key: 'a', value: 'hello' }
+    ],
+    [
+      { type: 'mount', key: 'b', remotePath: '/' },
+      { type: 'put', key: 'c', value: 'goodbye' }
+    ]
+  ], function (err, db) {
+    t.error(err)
+    db.version((err, v) => {
+      t.error(err)
+      version = v
+      db.put('a', 'something', err => {
+        t.error(err)
+        db.put('b/c', 'other', err => {
+          t.error(err)
+          db.put('c', 'blah', err => {
+            t.error(err)
+            validate(db)
+          })
+        })
+      })
+    })
+  })
+
+  var expected = [
+    { left: 'a', right: null },
+    { left: 'b/c', right: null },
+    { left: 'c', right: 'c'}
+  ]
+  var seen = 0
+
+  function validate (db) {
+    var diff = db.createDiffStream(version, '')
+    diff.on('data', (diff) => {
+      console.log('FINAL DIFF:', diff)
+      for (var i = 0; i < expected.length; i++) {
+        if (equals(toKeys(diff), expected[i])) {
+          seen++
+          return
+        }
+      }
+      t.fail('unexpected diff:', diff)
+    })
+    diff.on('end', () => {
+      t.equals(expected.length, seen)
+      t.end()
+    })
+    diff.on('error', (err) => {
+      t.fail(err.message)
+      t.end()
+    })
+  }
+
+})
 
 function toKeys (diff) {
   return {

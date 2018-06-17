@@ -726,13 +726,18 @@ UnionDB.prototype.lexIterator = function (opts) {
   }
 }
 
+/**
+ * Note: The diff stream currently *only* operates on the top layer.
+ */
 UnionDB.prototype.createDiffStream = function (other, prefix) {
   var self = this
 
   if (other) {
+    console.log('OTHER:', other)
     var version = messages.Version.decode(other)
     var localCheckout = version.localVersion
     var linkCheckouts = version.linkVersions
+    console.log('localCheckout:', localCheckout, 'linkCheckouts:', linkCheckouts)
   }
 
   var proxy = duplexify.obj()
@@ -746,21 +751,27 @@ UnionDB.prototype.createDiffStream = function (other, prefix) {
       this._db.createDiffStream(localDiff, p.join(DATA_PATH, prefix)),
       createKeyRewriteStream(key => key.slice(DATA_PATH.length))
     )
+
     var links = getLinks(prefix)
-    var linkStreams = links.map(link => createLinkStream(link))
-    // proxy.setReadable(merge.apply(merge, [localStream, ...linkStreams]))
-    proxy.setReadable(localStream)
-    proxy.resume()
+    if (links) {
+      map(links, (link, next) => {
+        return createLinkStream(link, next)
+      }, (err, linkStreams) => {
+        if (err) proxy.destroy(err)
+        proxy.setReadable(merge.apply(merge, [localStream, ...linkStreams]))
+        proxy.resume()
+      })
+    } else {
+      proxy.setReadable(localStream)
+      proxy.resume()
+    }
   })
 
   return proxy
 
-  function createLinkStream (link) {
-    var linkCheckout = linkVersions[link.localPath] ? link.db.checkout(linkVersions[link.localPath]) : null
-    return pumpify(
-      link.db.createDiffStream(link.db.checkout(linkVersions[link.localPath]), linkPath(link, prefix)),
-      createKeyRewriteStream(key => p.join(link.localPath, key))
-    )
+  function createLinkStream (link, cb) {
+    var version = linkCheckouts[link.localPath]
+    return cb(null, link.db.createDiffStream(version, linkPath(link, prefix)))
   }
 
   function createKeyRewriteStream (rewriter) {
