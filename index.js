@@ -7,6 +7,10 @@ var inherits = require('inherits')
 var bulk = require('bulk-write-stream')
 var codecs = require('codecs')
 var nanoiterator = require('nanoiterator')
+var duplexify = require('duplexify')
+var pumpify = require('pumpify')
+var through = require('through2')
+var merge = require('merge-stream')
 
 var Trie = require('./lib/trie')
 var messages = require('./lib/messages')
@@ -529,11 +533,7 @@ UnionDB.prototype.del = function (key, cb) {
             n.value = null
             n.deleted = true
           })
-          /*
-          self._changeHandlers.forEach(ch => {
-            ch(nodes)
-          })
-          */
+          if (self._links[key]) delete self._links[key]
           return cb(err)
         })
       })
@@ -726,7 +726,66 @@ UnionDB.prototype.lexIterator = function (opts) {
   }
 }
 
-UnionDB.prototype.createDiffStream = function (prefix, checkout) {
+UnionDB.prototype.createDiffStream = function (other, prefix) {
+  var self = this
+
+  if (other) {
+    var version = messages.Version.decode(other)
+    var localCheckout = version.localVersion
+    var linkCheckouts = version.linkVersions
+  }
+
+  var proxy = duplexify.obj()
+  proxy.pause()
+  proxy.setWritable(null)
+
+  this.ready(err => {
+    if (err) proxy.destroy(err)
+    var localDiff = localCheckout ? this._db.checkout(localCheckout) : null
+    var localStream = pumpify.obj(
+      this._db.createDiffStream(localDiff, p.join(DATA_PATH, prefix)),
+      createKeyRewriteStream(key => key.slice(DATA_PATH.length))
+    )
+    var links = getLinks(prefix)
+    var linkStreams = links.map(link => createLinkStream(link))
+    // proxy.setReadable(merge.apply(merge, [localStream, ...linkStreams]))
+    proxy.setReadable(localStream)
+    proxy.resume()
+  })
+
+  return proxy
+
+  function createLinkStream (link) {
+    var linkCheckout = linkVersions[link.localPath] ? link.db.checkout(linkVersions[link.localPath]) : null
+    return pumpify(
+      link.db.createDiffStream(link.db.checkout(linkVersions[link.localPath]), linkPath(link, prefix)),
+      createKeyRewriteStream(key => p.join(link.localPath, key))
+    )
+  }
+
+  function createKeyRewriteStream (rewriter) {
+    return through.obj((diff, enc, cb) => {
+      console.log('diff:', diff)
+      if (diff.left) {
+        diff.left.forEach(n => {
+          n.key = rewriter(n.key)
+        })
+      }
+     if (diff.right) {
+        diff.right.forEach(n => {
+          n.key = rewriter(n.key)
+        })
+      }
+      console.log('DIFF:', diff)
+      return cb(null, diff)
+    })
+  }
+
+  function getLinks (prefix) {
+    return Object.keys(self._links)
+      .filter(path => path.startsWith(prefix))
+      .map(path => self._links[path])
+  }
 }
 
 UnionDB.prototype.watch = function (key, onchange) {
@@ -845,4 +904,8 @@ UnionDB.prototype.version = function (cb) {
   }).catch(function (err) {
     return cb(err)
   })
+}
+
+function linkPath (link, prefix) {
+  return p.join(link.remotePath, prefix.slice(link.localPath.length))
 }
