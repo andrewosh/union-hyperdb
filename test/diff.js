@@ -119,14 +119,13 @@ test('diff with links', t => {
   var expected = [
     { left: 'a', right: null },
     { left: 'b/c', right: null },
-    { left: 'c', right: 'c'}
+    { left: 'c', right: 'c' }
   ]
   var seen = 0
 
   function validate (db) {
     var diff = db.createDiffStream(version, '')
     diff.on('data', (diff) => {
-      console.log('FINAL DIFF:', diff)
       for (var i = 0; i < expected.length; i++) {
         if (equals(toKeys(diff), expected[i])) {
           seen++
@@ -144,7 +143,6 @@ test('diff with links', t => {
       t.end()
     })
   }
-
 })
 
 function toKeys (diff) {
@@ -153,4 +151,3 @@ function toKeys (diff) {
     right: diff.right ? diff.right[0].key : null
   }
 }
-

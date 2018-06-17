@@ -456,6 +456,7 @@ UnionDB.prototype.put = function (key, value, cb) {
 
   this._ready.then(function () {
     // If there's a link, recurse into the linked db.
+    if (self._links[key]) return cb(new Error('Cannot overwrite a symlink. Please delete first.'))
     var link = self._linkTrie.get(key, { enclosing: true })
     if (link) {
       return link.db.put(key.slice(link.localPath), value, cb)
@@ -733,11 +734,9 @@ UnionDB.prototype.createDiffStream = function (other, prefix) {
   var self = this
 
   if (other) {
-    console.log('OTHER:', other)
     var version = messages.Version.decode(other)
     var localCheckout = version.localVersion
     var linkCheckouts = version.linkVersions
-    console.log('localCheckout:', localCheckout, 'linkCheckouts:', linkCheckouts)
   }
 
   var proxy = duplexify.obj()
@@ -776,18 +775,16 @@ UnionDB.prototype.createDiffStream = function (other, prefix) {
 
   function createKeyRewriteStream (rewriter) {
     return through.obj((diff, enc, cb) => {
-      console.log('diff:', diff)
       if (diff.left) {
         diff.left.forEach(n => {
           n.key = rewriter(n.key)
         })
       }
-     if (diff.right) {
+      if (diff.right) {
         diff.right.forEach(n => {
           n.key = rewriter(n.key)
         })
       }
-      console.log('DIFF:', diff)
       return cb(null, diff)
     })
   }
