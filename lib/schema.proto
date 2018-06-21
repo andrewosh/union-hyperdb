@@ -17,7 +17,8 @@ message Link {
   required DB db = 1;
   required string localPath = 2;
   optional string remotePath = 3;
-  optional bool flat = 4;
+  optional string valueEncoding = 4;
+  optional bool flat = 5;
 }
 
 message Entry {

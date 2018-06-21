@@ -169,7 +169,7 @@ UnionDB.prototype._loadDatabase = function (record, opts, cb) {
 
   this._createUnionDB(dbMetadata.key, {
     version: dbMetadata.version,
-    valueEncoding: this.opts.valueEncoding,
+    valueEncoding: opts.valueEncoding || this.opts.valueEncoding,
     sparse: opts.sparse || false
   }, function (err, db) {
     if (err) return cb(err)
@@ -209,7 +209,10 @@ UnionDB.prototype._loadLinks = function (cb) {
         linkRecord.db.version = self.linkVersions[linkRecord.localPath]
       }
 
-      self._loadDatabase(linkRecord, { sparse: true }, function (err) {
+      self._loadDatabase(linkRecord, {
+        valueEncoding: linkRecord.valueEncoding,
+        sparse: true
+      }, function (err) {
         if (err) return next(err)
         self._links[linkId] = linkRecord
         self._linkTrie.add(linkRecord.localPath, linkRecord, {
@@ -258,6 +261,11 @@ UnionDB.prototype._createUnionDB = function (key, opts, cb) {
 }
 
 UnionDB.prototype._prereturn = function (result) {
+  if (!result) return null
+  result.forEach(n => {
+    n.key = n.key.slice(DATA_PATH.length)
+    if (this._codec) n.value = this._codec.decode(n.value)
+  })
   if (this.map) result = result.map(n => this.map(n))
   if (this.reduce) result = result.reduce(this.reduce)
   return result
@@ -271,11 +279,6 @@ UnionDB.prototype._get = function (idx, key, cb) {
     return this._db.get(p.join(DATA_PATH, key), function (err, nodes) {
       if (err) return cb(err)
       if (!nodes) return cb(null, null)
-      if (self._codec) {
-        nodes.forEach(function (node) {
-          node.value = self._codec.decode(node.value)
-        })
-      }
       return cb(null, self._prereturn(nodes))
     })
   }
@@ -330,6 +333,7 @@ UnionDB.prototype._putLink = function (key, path, opts, cb) {
     },
     localPath: path,
     remotePath: opts.remotePath,
+    valueEncoding: opts.valueEncoding,
     flat: !!opts.flat
   }), function (err) {
     if (err) return cb(err)
@@ -411,6 +415,7 @@ UnionDB.prototype._getEntryValues = function (key, nodes, cb) {
 // BEGIN Public API
 
 UnionDB.prototype.mount = function (key, path, opts, cb) {
+  if (typeof opts === 'function') return this.mount(key, path, null, opts)
   var self = this
 
   this._ready.then(function () {
@@ -529,11 +534,6 @@ UnionDB.prototype.del = function (key, cb) {
         if (err) return cb(err)
         self._db.del(p.join(DATA_PATH, key), err => {
           if (err) return cb(err)
-          nodes.forEach(n => {
-            n.key = n.key.slice(DATA_PATH.length)
-            n.value = null
-            n.deleted = true
-          })
           if (self._links[key]) delete self._links[key]
           return cb(err)
         })
@@ -668,11 +668,7 @@ UnionDB.prototype.lexIterator = function (opts) {
         if (values.length) {
           // Remove deletions
           values = values.filter(v => !!v.value)
-          values.forEach(function (v) {
-            v.key = v.key.slice(DATA_PATH.length)
-          })
         } else {
-          values.key = values.key.slice(DATA_PATH.length)
           if (!values.value) values = null
         }
         if (!values) return next(cb)
@@ -748,7 +744,12 @@ UnionDB.prototype.createDiffStream = function (other, prefix) {
     var localDiff = localCheckout ? this._db.checkout(localCheckout) : null
     var localStream = pumpify.obj(
       this._db.createDiffStream(localDiff, p.join(DATA_PATH, prefix)),
-      createKeyRewriteStream(key => key.slice(DATA_PATH.length))
+      through.obj(({ left, right }, enc, cb) => {
+        return cb(null, {
+          left: self._prereturn(left),
+          right: self._prereturn(right)
+        })
+      })
     )
 
     var links = getLinks(prefix)
@@ -771,22 +772,6 @@ UnionDB.prototype.createDiffStream = function (other, prefix) {
   function createLinkStream (link, cb) {
     var version = linkCheckouts[link.localPath]
     return cb(null, link.db.createDiffStream(version, linkPath(link, prefix)))
-  }
-
-  function createKeyRewriteStream (rewriter) {
-    return through.obj((diff, enc, cb) => {
-      if (diff.left) {
-        diff.left.forEach(n => {
-          n.key = rewriter(n.key)
-        })
-      }
-      if (diff.right) {
-        diff.right.forEach(n => {
-          n.key = rewriter(n.key)
-        })
-      }
-      return cb(null, diff)
-    })
   }
 
   function getLinks (prefix) {
@@ -866,6 +851,18 @@ UnionDB.prototype.fork = function (opts, cb) {
       }
     }), cb)
   }
+}
+
+UnionDB.prototype.sub = function (path, opts, cb) {
+  if (typeof opts === 'function') return this.sub(path, null, opts)
+  opts = opts || {}
+  this._createUnionDB(null, opts, (err, db) => {
+    if (err) return cb(err)
+    this.mount(db.key, path, opts, err => {
+      if (err) return cb(err)
+      return cb(null, db)
+    })
+  })
 }
 
 /**
