@@ -3,6 +3,26 @@ var test = require('tape')
 var create = require('./helpers/create')
 var verify = require('./helpers/verify')
 
+test('a link can be created and read', function (t) {
+  create.fromLayers([
+    [
+      { type: 'put', key: 'a', value: 'hello' },
+      { type: 'put', key: 'b', value: 'goodbye' }
+    ]
+  ], function (err, db) {
+    t.error(err)
+    db.sub('link', function (err, sub) {
+      t.error(err)
+      db.get('link', function (err, nodes) {
+        t.error(err)
+        t.same(nodes.length, 1)
+        t.same(nodes[0].value.localPath, 'link')
+        t.end()
+      })
+    })
+  })
+})
+
 test('simple read from a mount works', function (t) {
   t.plan(1 + 3 * 3)
 

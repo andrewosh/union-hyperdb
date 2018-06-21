@@ -434,7 +434,15 @@ UnionDB.prototype.get = function (key, opts, cb) {
   this._ready.then(function () {
     // If there's a link, recurse into the linked db.
     var link = self._linkTrie.get(key, { enclosing: true })
-    if (link) {
+    if (link && link.localPath === key) {
+      // TODO: hacky way of getting link records.
+      // This shows that conflict handling for links needs to be fixed.
+      var linkMeta = Object.assign({}, link, { db: null })
+      return cb(null, [{
+        key,
+        value: linkMeta
+      }])
+    } else if (link) {
       var remotePath = p.resolve(key.slice(link.localPath.length))
       if (link.remotePath) remotePath = p.resolve(p.join(link.remotePath, remotePath))
       return link.db.get(remotePath, opts, cb)
@@ -669,6 +677,7 @@ UnionDB.prototype.lexIterator = function (opts) {
           // Remove deletions
           values = values.filter(v => !!v.value)
         } else {
+          values.key = values.key.slice(DATA_PATH.length)
           if (!values.value) values = null
         }
         if (!values) return next(cb)
