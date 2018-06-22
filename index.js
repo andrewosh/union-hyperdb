@@ -428,43 +428,54 @@ UnionDB.prototype.mount = function (key, path, opts, cb) {
   })
 }
 
-UnionDB.prototype.get = function (key, opts, cb) {
+UnionDB.prototype.get = async function (key, opts, cb) {
   if (typeof opts === 'function') return this.get(key, null, opts)
   opts = opts || {}
 
   var self = this
 
-  this._ready.then(function () {
-    // If there's a link, recurse into the linked db.
-    var link = self._linkTrie.get(key, { enclosing: true })
-    if (link && link.localPath === key) {
-      // TODO: hacky way of getting link records.
-      // This shows that conflict handling for links needs to be fixed.
-      var linkMeta = Object.assign({}, link, { db: null })
-      return cb(null, [{
-        key,
-        value: linkMeta
-      }])
-    } else if (link) {
-      var remotePath = p.resolve(key.slice(link.localPath.length))
-      if (link.remotePath) remotePath = p.resolve(p.join(link.remotePath, remotePath))
-      return link.db.get(remotePath, opts, cb)
-    }
-
-    // Else, first check this database, then recurse into parents.
-    self._db.get(p.join(INDEX_PATH, key), function (err, nodes) {
-      if (err) return cb(err)
-      if ((!nodes || !nodes.length) && self.parent) {
-        return self.parent.db.get(key, opts, cb)
+  return maybe(cb, new Promise((resolve, reject) => {
+    this._ready.then(function () {
+      // If there's a link, recurse into the linked db.
+      var link = self._linkTrie.get(key, { enclosing: true })
+      if (link && link.localPath === key) {
+        // TODO: hacky way of getting link records.
+        // This shows that conflict handling for links needs to be fixed.
+        var linkMeta = Object.assign({}, link, { db: null })
+        return resolve([{
+          key,
+          value: linkMeta
+        }])
+      } else if (link) {
+        var remotePath = p.resolve(key.slice(link.localPath.length))
+        if (link.remotePath) remotePath = p.resolve(p.join(link.remotePath, remotePath))
+        return link.db.get(remotePath, opts, (err, nodes) => {
+          if (err) return reject(err)
+          return resolve(nodes)
+        })
       }
 
-      if (!nodes || !nodes.length) return cb(null)
+      // Else, first check this database, then recurse into parents.
+      self._db.get(p.join(INDEX_PATH, key), function (err, nodes) {
+        if (err) return cb(err)
+        if ((!nodes || !nodes.length) && self.parent) {
+          return self.parent.db.get(key, opts, (err, values) => {
+            if (err) return reject(err)
+            return resolve(values)
+          })
+        }
 
-      return self._getEntryValues(key, nodes, cb)
+        if (!nodes || !nodes.length) return resolve(null)
+
+        return self._getEntryValues(key, nodes, (err, values) => {
+          if (err) return reject(err)
+          return resolve(values)
+        })
+      })
+    }).catch(function (err) {
+      return reject(err)
     })
-  }).catch(function (err) {
-    return cb(err)
-  })
+  }))
 }
 
 UnionDB.prototype.put = async function (key, value, cb) {
@@ -500,29 +511,31 @@ UnionDB.prototype.put = async function (key, value, cb) {
   }))
 }
 
-UnionDB.prototype.batch = function (records, cb) {
+UnionDB.prototype.batch = async function (records, cb) {
   var self = this
 
-  this._ready.then(function () {
-    // Warning: records is mutated in this map to save an iteration.
-    var stats = records.map(function (record) {
-      var stat = {
-        type: 'put',
-        key: p.join(DATA_PATH, record.key),
-        value: (self._codec) ? self._codec.encode(record.value) : record.value
-      }
-      record.key = p.join(INDEX_PATH, record.key)
-      record.value = self._makeIndex(record.key, 0, false)
-      return stat
+  return maybe(cb, new Promise((resolve, reject) => {
+    this._ready.then(function () {
+      // Warning: records is mutated in this map to save an iteration.
+      var stats = records.map(function (record) {
+        var stat = {
+          type: 'put',
+          key: p.join(DATA_PATH, record.key),
+          value: (self._codec) ? self._codec.encode(record.value) : record.value
+        }
+        record.key = p.join(INDEX_PATH, record.key)
+        record.value = self._makeIndex(record.key, 0, false)
+        return stat
+      })
+      var toBatch = records.concat(stats)
+      return self._db.batch(toBatch, (err, nodes) => {
+        if (err) return reject(err)
+        return resolve(nodes)
+      })
+    }).catch(function (err) {
+      return reject(err)
     })
-    var toBatch = records.concat(stats)
-    return self._db.batch(toBatch, (err, nodes) => {
-      if (err) return cb(err)
-      return cb(null, nodes)
-    })
-  }).catch(function (err) {
-    return cb(err)
-  })
+  }))
 }
 
 UnionDB.prototype.createWriteStream = function () {
@@ -868,16 +881,19 @@ UnionDB.prototype.fork = function (opts, cb) {
   }
 }
 
-UnionDB.prototype.sub = function (path, opts, cb) {
+UnionDB.prototype.sub = async function (path, opts, cb) {
   if (typeof opts === 'function') return this.sub(path, null, opts)
   opts = opts || {}
-  this._createUnionDB(null, opts, (err, db) => {
-    if (err) return cb(err)
-    this.mount(db.key, path, opts, err => {
-      if (err) return cb(err)
-      return cb(null, db)
+
+  return maybe(cb, new Promise((resolve, reject) => {
+    this._createUnionDB(null, opts, (err, db) => {
+      if (err) return reject(err)
+      this.mount(db.key, path, opts, err => {
+        if (err) return reject(err)
+        return resolve(db)
+      })
     })
-  })
+  }))
 }
 
 /**
