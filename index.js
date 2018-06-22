@@ -11,6 +11,7 @@ var duplexify = require('duplexify')
 var pumpify = require('pumpify')
 var through = require('through2')
 var merge = require('merge-stream')
+var maybe = require('call-me-maybe')
 
 var Trie = require('./lib/trie')
 var messages = require('./lib/messages')
@@ -636,14 +637,18 @@ UnionDB.prototype._list = function (prefix, dir, cb) {
   }
 }
 
-UnionDB.prototype.list = function (dir, cb) {
+UnionDB.prototype.list = async function (dir, cb) {
   var self = this
-
-  this._ready.then(function () {
-    return self._list(INDEX_PATH, p.join(INDEX_PATH, dir), cb)
-  }).catch(function (err) {
-    return cb(err)
-  })
+  return maybe(cb, new Promise((resolve, reject) => {
+    this._ready.then(function () {
+      return self._list(INDEX_PATH, p.join(INDEX_PATH, dir), (err, values) => {
+        if (err) return reject(err)
+        return resolve(values)
+      })
+    }).catch(function (err) {
+      return reject(err)
+    })
+  }))
 }
 
 /**
