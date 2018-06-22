@@ -263,9 +263,11 @@ UnionDB.prototype._createUnionDB = function (key, opts, cb) {
 
 UnionDB.prototype._prereturn = function (result) {
   if (!result) return null
-  result.forEach(n => {
-    n.key = n.key.slice(DATA_PATH.length)
-    if (this._codec) n.value = this._codec.decode(n.value)
+  result = result.map(n => {
+    return Object.assign({}, {...n}, {
+      key: n.key.slice(DATA_PATH.length),
+      value: (this._codec) ? this._codec.decode(n.value) : n.value
+    })
   })
   if (this.map) result = result.map(n => this.map(n))
   if (this.reduce) result = result.reduce(this.reduce)
@@ -465,7 +467,7 @@ UnionDB.prototype.get = function (key, opts, cb) {
   })
 }
 
-UnionDB.prototype.put = function (key, value, cb) {
+UnionDB.prototype.put = async function (key, value, cb) {
   var self = this
 
   return maybe(cb, new Promise((resolve, reject) => {
@@ -516,13 +518,6 @@ UnionDB.prototype.batch = function (records, cb) {
     var toBatch = records.concat(stats)
     return self._db.batch(toBatch, (err, nodes) => {
       if (err) return cb(err)
-      nodes.forEach(n => {
-        if (n.key.startsWith(INDEX_PATH)) {
-          n.key = n.key.slice(INDEX_PATH.length)
-        } else if (n.key.startsWith(DATA_PATH)) {
-          n.key = n.key.slice(DATA_PATH.length)
-        }
-      })
       return cb(null, nodes)
     })
   }).catch(function (err) {
