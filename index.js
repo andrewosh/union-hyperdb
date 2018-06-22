@@ -468,28 +468,34 @@ UnionDB.prototype.get = function (key, opts, cb) {
 UnionDB.prototype.put = function (key, value, cb) {
   var self = this
 
-  this._ready.then(function () {
-    // If there's a link, recurse into the linked db.
-    if (self._links[key]) return cb(new Error('Cannot overwrite a symlink. Please delete first.'))
-    var link = self._linkTrie.get(key, { enclosing: true })
-    if (link) {
-      return link.db.put(key.slice(link.localPath), value, cb)
-    }
+  return maybe(cb, new Promise((resolve, reject) => {
+    this._ready.then(function () {
+      // If there's a link, recurse into the linked db.
+      if (self._links[key]) return cb(new Error('Cannot overwrite a symlink. Please delete first.'))
+      var link = self._linkTrie.get(key, { enclosing: true })
+      if (link) {
+        return link.db.put(key.slice(link.localPath), value, err => {
+          if (err) return reject(err)
+          return resolve()
+        })
+      }
 
-    var encoded = (self._codec) ? self._codec.encode(value) : value
+      var encoded = (self._codec) ? self._codec.encode(value) : value
 
-    var dataPath = p.join(DATA_PATH, key)
+      var dataPath = p.join(DATA_PATH, key)
 
-    // TODO: This operation should be transactional.
-    self._db.put(dataPath, encoded, function (err) {
-      if (err) return cb(err)
-      self._putIndex(key, 0, false, function (err) {
-        return cb(err)
+      // TODO: This operation should be transactional.
+      self._db.put(dataPath, encoded, function (err) {
+        if (err) return cb(err)
+        self._putIndex(key, 0, false, function (err) {
+          if (err) return reject(err)
+          return resolve()
+        })
       })
+    }).catch(function (err) {
+      return reject(err)
     })
-  }).catch(function (err) {
-    return cb(err)
-  })
+  }))
 }
 
 UnionDB.prototype.batch = function (records, cb) {
