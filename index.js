@@ -85,6 +85,7 @@ function UnionDB (factory, key, opts) {
 
   // Set in open.
   this._db = null
+  this._feeds = null
 
   var self = this
 
@@ -112,6 +113,7 @@ function UnionDB (factory, key, opts) {
       self._db.ready(function (err) {
         if (err) return reject(err)
         self.localKey = self._db.local.key
+        self._feeds = self._db.feeds
         self._db.watch(LINKS_PATH, function () {
           // Refresh the links whenever any change.
           return self._loadLinks()
@@ -297,14 +299,17 @@ UnionDB.prototype._makeIndex = function (key, idx, deleted, link) {
   return messages.Entry.encode(entry)
 }
 
-UnionDB.prototype._putIndex = function (key, idx, deleted, cb) {
+UnionDB.prototype._putIndex = async function (key, idx, deleted, cb) {
   var indexPath = p.join(INDEX_PATH, key)
 
   var index = this._makeIndex(key, idx, deleted)
 
-  this._db.put(indexPath, index, function (err) {
-    return cb(err)
-  })
+  return maybe(cb, new Promise(async (resolve, reject) => {
+    this._db.put(indexPath, index, err => {
+      if (err) return reject(err)
+      return resolve()
+    })
+  }))
 }
 
 UnionDB.prototype._putIndices = function (indices, cb) {
@@ -342,6 +347,11 @@ UnionDB.prototype._putLink = function (key, path, opts, cb) {
     if (err) return cb(err)
     return self._loadLinks(cb)
   })
+}
+
+UnionDB.prototype._delLink = function (path, cb) {
+  var linkPath = p.join(LINKS_PATH, path)
+  this._db.put(linkPath, this._makeIndex(linkPath, 0, true, cb))
 }
 
 UnionDB.prototype._getIndex = function (cb) {
@@ -547,24 +557,25 @@ UnionDB.prototype.createWriteStream = function () {
   }
 }
 
-UnionDB.prototype.del = function (key, cb) {
+UnionDB.prototype.del = async function (key, cb) {
   var self = this
 
-  this._ready.then(function () {
-    self.get(key, (err, nodes) => {
-      if (err) return cb(err)
-      self._putIndex(key, 0, true, function (err) {
-        if (err) return cb(err)
-        self._db.del(p.join(DATA_PATH, key), err => {
-          if (err) return cb(err)
-          if (self._links[key]) delete self._links[key]
-          return cb(err)
+  return maybe(cb, new Promise(async (resolve, reject) => {
+    await this._ready
+    await self._putIndex(key, 0, true)
+    self._db.del(p.join(DATA_PATH, key), err => {
+      if (err) return reject(err)
+      if (self._links[key]) {
+        self._delLink(key, err => {
+          if (err) return reject(err)
+          delete self._links[key]
+          return resolve(null)
         })
-      })
+      } else {
+        return resolve(null)
+      }
     })
-  }).catch(function (err) {
-    return cb(err)
-  })
+  }))
 }
 
 /**
@@ -820,12 +831,7 @@ UnionDB.prototype.watch = function (key, onchange) {
   // TODO: add a watch if a link is added to a watched directory (currently will have to re-watch).
   Object.keys(self._links).forEach(watchLink)
 
-  watchers.push(this._db.watch(p.join(DATA_PATH, key), function change (nodes) {
-    return onchange(nodes.map(function (node) {
-      node.key = node.key.slice(DATA_PATH.length)
-      return node
-    }))
-  }))
+  watchers.push(this._db.watch(p.join(DATA_PATH, key), onchange))
 
   self._changeHandlers.push(onchange)
 
@@ -841,16 +847,10 @@ UnionDB.prototype.watch = function (key, onchange) {
 
   function watchLink (linkKey) {
     if (linkKey.startsWith(key) || key.startsWith(linkKey)) {
-      var prefix = linkKey.slice(key.length)
       var suffix = key.slice(linkKey.length)
       var linkRecord = self._links[linkKey]
 
-      watchers.push(linkRecord.db.watch((suffix === '') ? '/' : suffix, function change (nodes) {
-        return onchange(nodes.map(function (node) {
-          node.key = p.join(prefix, node.key)
-          return node
-        }))
-      }))
+      watchers.push(linkRecord.db.watch((suffix === '') ? '/' : suffix, onchange))
     }
   }
 }
@@ -907,39 +907,41 @@ UnionDB.prototype.authorize = function (key) {
   return this._db.authorize(key)
 }
 
-UnionDB.prototype.version = function (cb) {
+UnionDB.prototype.version = async function (cb) {
   var self = this
 
-  this._ready.then(function () {
-    self._db.version(function (err, dbVersion) {
-      if (err) return cb(err)
+  return maybe(cb, new Promise((resolve, reject) => {
+    this._ready.then(function () {
+      self._db.version(function (err, dbVersion) {
+        if (err) return reject(err)
 
-      var sortedLinks = Object.values(self._links).sort(function (l1, l2) {
-        return l1.db.key < l2.db.key
-      })
-
-      map(sortedLinks, function (link, next) {
-        link.db.version(function (err, version) {
-          if (err) return next(err)
-          return next(null, { path: link.localPath, version: version })
-        })
-      }, function (err, linkAndVersions) {
-        if (err) return cb(err)
-
-        var linkVersions = {}
-        linkAndVersions.forEach(function (lak) {
-          linkVersions[lak.path] = lak.version
+        var sortedLinks = Object.values(self._links).sort(function (l1, l2) {
+          return l1.db.key < l2.db.key
         })
 
-        return cb(null, messages.Version.encode({
-          localVersion: dbVersion,
-          linkVersions: linkVersions
-        }))
+        map(sortedLinks, function (link, next) {
+          link.db.version(function (err, version) {
+            if (err) return next(err)
+            return next(null, { path: link.localPath, version: version })
+          })
+        }, function (err, linkAndVersions) {
+          if (err) return reject(err)
+
+          var linkVersions = {}
+          linkAndVersions.forEach(function (lak) {
+            linkVersions[lak.path] = lak.version
+          })
+
+          return resolve(messages.Version.encode({
+            localVersion: dbVersion,
+            linkVersions: linkVersions
+          }))
+        })
       })
+    }).catch(function (err) {
+      return reject(err)
     })
-  }).catch(function (err) {
-    return cb(err)
-  })
+  }))
 }
 
 function linkPath (link, prefix) {

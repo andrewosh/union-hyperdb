@@ -9,9 +9,7 @@ test('should emit changes to watch functions', t => {
     ]
   ], function (err, db) {
     t.error(err)
-    db.watch('/', (nodes) => {
-      t.true(nodes.length)
-      t.same(nodes[0].key, 'a')
+    db.watch('/', () => {
       t.end()
     })
     db.put('a', 'hello', function (err) {
@@ -28,9 +26,7 @@ test('should emit deletions', t => {
     ]
   ], function (err, db) {
     t.error(err)
-    db.watch('/', (nodes) => {
-      t.true(nodes.length)
-      t.same(nodes[0].key, 'a')
+    db.watch('/', () => {
       t.end()
     })
     db.del('a', function (err) {
@@ -50,9 +46,7 @@ test('should emit changes in symlinks to watch functions', t => {
     ]
   ], function (err, db) {
     t.error(err)
-    db.watch('b', (nodes) => {
-      t.true(nodes.length)
-      t.same(nodes[0].key, 'b/d')
+    db.watch('b', () => {
       t.end()
     })
     db.put('b/d', 'hello', err => {
@@ -73,9 +67,7 @@ test('should stop watching', t => {
   ], function (err, db) {
     t.error(err)
     var calls = 0
-    var unwatch = db.watch('b', (nodes) => {
-      t.true(nodes.length)
-      t.same(nodes[0].key, 'b/d')
+    var unwatch = db.watch('b', () => {
       calls++
     })
     db.put('b/d', 'hello', err => {
