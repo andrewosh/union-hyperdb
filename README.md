@@ -5,7 +5,7 @@
 union-hyperdb is a wrapper around multiple [hyperdbs](https://github.com/mafintosh/hyperdb) that supports nesting and/or layering of hyperdbs within a parent database:
 
 1. Lightweight __forking__ and __layering__ operations are supported through a `parents` relationship. If an entry can't be found in the main tree, the search will traverse into all parents. This creates a union filesystem-like view over the underlying databases.
-2. Cross-tree __symlinking__ (of both live and versioned trees) is supported through special `Link` entries. 
+2. Cross-db __symlinking__ (of both live and versioned dbs) is supported through special `Link` entries. 
 
 No external indexing is required, and sub-dbs are instantiated dynamically when first needed.
 
