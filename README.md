@@ -65,4 +65,6 @@ Create a lexicographic iterator over the database.
 
 #### `index(cb)`
 
-Compute a layer index over the entire database, such that lookups will require constant time (in the number of layers). If one does *not* call `index` before calling read-intensive methods, then those methods might need to sequentially search each layer for content.
+Compute a layer index over the entire database, such that lookups will require constant time (in the number of layers). 
+
+__Note__: If one does *not* call `index` before calling read-intensive methods, then those methods might need to sequentially search each layer for content.
