@@ -427,15 +427,15 @@ UnionDB.prototype._getEntryValues = function (key, nodes, cb) {
 
 // BEGIN Public API
 
-UnionDB.prototype.mount = function (key, path, opts, cb) {
+UnionDB.prototype.mount = async function (key, path, opts, cb) {
   if (typeof opts === 'function') return this.mount(key, path, null, opts)
-  var self = this
-
-  this._ready.then(function () {
-    return self._putLink(key, path, opts, cb)
-  }).catch(function (err) {
-    return cb(err)
-  })
+  return maybe(cb, new Promise(async (resolve, reject) => {
+    await this.ready()
+    this._putLink(key, path, opts, err => {
+      if (err) return reject(err)
+      return resolve()
+    })
+  }))
 }
 
 UnionDB.prototype.get = async function (key, opts, cb) {
