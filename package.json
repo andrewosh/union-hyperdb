@@ -12,7 +12,9 @@
     "duplexify": "^3.6.0",
     "merge-stream": "^1.0.1",
     "nanoiterator": "^1.2.0",
+    "pify": "^3.0.0",
     "protocol-buffers": "^4.0.2",
+    "pump": "^3.0.0",
     "pumpify": "^1.5.1",
     "through2": "^2.0.3",
     "thunky": "^1.0.2"

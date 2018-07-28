@@ -2,13 +2,13 @@ var p = require('path')
 var EventEmitter = require('events').EventEmitter
 
 var map = require('async-each')
-var each = map
 var inherits = require('inherits')
 var bulk = require('bulk-write-stream')
 var codecs = require('codecs')
 var nanoiterator = require('nanoiterator')
 var duplexify = require('duplexify')
 var pumpify = require('pumpify')
+var pump = require('pump')
 var through = require('through2')
 var merge = require('merge-stream')
 var maybe = require('call-me-maybe')
@@ -71,8 +71,6 @@ function UnionDB (factory, key, opts) {
     this.linkVersions = this.versions.linkVersions
   }
 
-  this.localKey = null
-
   this._codec = (this.opts.valueEncoding) ? codecs(this.opts.valueEncoding) : null
   this._links = {}
   this._linkTrie = new Trie()
@@ -91,13 +89,9 @@ function UnionDB (factory, key, opts) {
 
   this._ready = open()
 
-  this.ready = function (cb) {
-    if (!cb) return self._ready
-    self._ready.then(function () {
-      return cb(null)
-    }).catch(function (err) {
-      return cb(err)
-    })
+  this.ready = async function (cb) {
+    await self._ready
+    if (cb) return cb()
   }
 
   async function open () {
@@ -109,185 +103,158 @@ function UnionDB (factory, key, opts) {
     let db = factory(self.key, opts)
     if (self.localVersion) db = db.checkout(self.localVersion, opts)
     self._db = db
-    return new Promise((resolve, reject) => {
-      self._db.ready(function (err) {
-        if (err) return reject(err)
-        self.localKey = self._db.local.key
-        self._feeds = self._db.feeds
-        self._db.watch(LINKS_PATH, function () {
-          // Refresh the links whenever any change.
-          return self._loadLinks()
-        })
-        if (self.key) {
-          return self._load(err => {
-            if (err) return reject(err)
-            return resolve()
-          })
-        }
-        self.key = db.key
-        return self._save(err => {
-          if (err) return reject(err)
-          return resolve()
-        })
-      })
+
+    await ready(self._db)
+    self._feeds = self._db.feeds
+    self._db.watch(LINKS_PATH, function () {
+      // Refresh the links whenever any change.
+      return self._loadLinks()
     })
+    if (self.key) {
+      console.log('loading')
+      await self._load()
+      console.log('loaded')
+      self.emit('ready')
+      return
+    }
+    self.key = db.key
+    console.log('saving')
+    await self._save()
+    self.emit('ready')
   }
 }
 inherits(UnionDB, EventEmitter)
 
-UnionDB.prototype._getMetadata = function (cb) {
+UnionDB.prototype._getMetadata = async function () {
   var self = this
 
-  this._db.ready(function (err) {
-    if (err) return cb(err)
-    self._db.get(META_PATH, function (err, nodes) {
-      if (err) return cb(err)
-      if (!nodes || !nodes.length) return cb(null, null)
-      if (nodes.length > 1) console.error('Conflict in metadata file -- using first node\'s value.')
-      return cb(null, messages.Metadata.decode(nodes[0].value))
+  return new Promise((resolve, reject) => {
+    this._db.ready(function (err) {
+      if (err) return reject(err)
+      self._db.get(META_PATH, function (err, nodes) {
+        if (err) return reject(err)
+        if (!nodes || !nodes.length) return resolve(null)
+        if (nodes.length > 1) console.error('Conflict in metadata file -- using first node\'s value.')
+        return resolve(messages.Metadata.decode(nodes[0].value))
+      })
     })
   })
 }
 
-UnionDB.prototype._saveMetadata = function (cb) {
-  var self = this
-
-  this._db.ready(function (err) {
-    if (err) return cb(err)
-    self._db.put(META_PATH, messages.Metadata.encode({
-      parents: [self.parent],
-      indexed: self.indexed
-    }), function (err) {
-      if (err) return cb(err)
-      return cb(null)
-    })
-  })
+UnionDB.prototype._saveMetadata = async function () {
+  await ready(this._db)
+  await put(this._db, META_PATH, messages.Metadata.encode({
+    parents: [this.parent],
+    indexed: this.indexed
+  }))
 }
 
-UnionDB.prototype._loadDatabase = function (record, opts, cb) {
+UnionDB.prototype._loadDatabase = async function (record, opts) {
   if (typeof opts === 'function') return this._loadDatabase(record, null, opts)
   opts = opts || {}
 
   var dbMetadata = (record.db) ? record.db : record
-
-  this._createUnionDB(dbMetadata.key, {
+  let db = await this._createUnionDB(dbMetadata.key, {
     version: dbMetadata.version,
     valueEncoding: opts.valueEncoding || this.opts.valueEncoding,
     sparse: opts.sparse || false
-  }, function (err, db) {
-    if (err) return cb(err)
-    record.db = db
-    return cb()
   })
+  record.db = db
 }
 
-UnionDB.prototype._loadParent = function (cb) {
+UnionDB.prototype._loadParent = async function () {
   if (this.parent) {
-    return this._loadDatabase(this.parent, cb)
+    return this._loadDatabase(this.parent)
   }
-  process.nextTick(cb, null)
 }
 
-UnionDB.prototype._isIndexed = function (cb) {
-  this._getMetadata(function (err, metadata) {
-    if (err) return cb(err)
-    return cb(null, metadata.indexed)
-  })
+UnionDB.prototype._isIndexed = async function () {
+  let metadata = await this._getMetadata()
+  return metadata.indexed
 }
 
-UnionDB.prototype._loadLinks = function (cb) {
-  var self = this
-
-  this._findEntries(LINKS_PATH, function (err, entries) {
-    if (err) return cb(err)
-
-    each(Object.values(entries), function (entry, next) {
-      var linkRecord = entry.link
+UnionDB.prototype._loadLinks = async function (cb) {
+  return maybe(cb, new Promise(async (resolve, reject) => {
+    let entries = this._findEntries('/', { onlyLinks: true })
+    console.log('IN _LOADLINKS, ENTRIES:', entries)
+    for (let entry of Object.values(entries)) {
+      let linkRecord = entry.link
       // TODO: might need a better link identifier.
-      var linkId = linkRecord.localPath
+      let linkId = linkRecord.localPath
 
-      if (self._links[linkId]) return next()
+      if (this._links[linkId]) continue
 
-      if (self.linkVersions && self.linkVersions[linkRecord.localPath]) {
-        linkRecord.db.version = self.linkVersions[linkRecord.localPath]
+      if (this.linkVersions && this.linkVersions[linkRecord.localPath]) {
+        linkRecord.db.version = this.linkVersions[linkRecord.localPath]
       }
 
-      self._loadDatabase(linkRecord, {
+      await this._loadDatabase(linkRecord, {
         valueEncoding: linkRecord.valueEncoding,
         sparse: true
-      }, function (err) {
-        if (err) return next(err)
-        self._links[linkId] = linkRecord
-        self._linkTrie.add(linkRecord.localPath, linkRecord, {
-          push: !!linkRecord.flat
-        })
-        return next()
       })
-    }, function (err) {
-      if (!cb && err) throw err
-      if (cb) return cb(err)
-    })
-  })
+      this._links[linkId] = linkRecord
+      this._linkTrie.add(linkRecord.localPath, linkRecord, {
+        push: !!linkRecord.flat
+      })
+    }
+    return resolve()
+  }))
 }
 
-UnionDB.prototype._load = function (cb) {
+UnionDB.prototype._load = async function () {
   var self = this
 
-  this._getMetadata(function (err, metadata) {
-    if (err) return cb(err)
-    if (!metadata) return cb()
+  let metadata = await this._getMetadata()
+  if (!metadata) return
+
     // TODO: handle the case of multiple parents? (i.e. a merge)
-    self.parent = metadata.parents[0]
-    self._loadParent(function (err) {
-      if (err) return cb(err)
-      return self._loadLinks(cb)
-    })
-  })
+  self.parent = metadata.parents[0]
+  console.log('loading parent')
+  await self._loadParent()
+  console.log('loaded parent')
+  // await self._loadLinks()
+  console.log('loaded links')
 }
 
-UnionDB.prototype._save = function (cb) {
-  var self = this
-
-  this._saveMetadata(function (err) {
-    if (err) return cb(err)
-    if (self.parent) return self._loadParent(cb)
-    return cb()
-  })
+UnionDB.prototype._save = async function () {
+  await this._saveMetadata()
+  if (this.parent) await this._loadParent()
 }
 
-UnionDB.prototype._createUnionDB = function (key, opts, cb) {
+UnionDB.prototype._createUnionDB = async function (key, opts) {
   let db = new UnionDB(this._factory, key, opts)
-  db.ready(err => {
-    if (err) return cb(err)
-    return cb(null, db)
+  return new Promise((resolve, reject) => {
+    db.ready(err => {
+      if (err) return reject(err)
+      return resolve(db)
+    })
   })
 }
 
 UnionDB.prototype._prereturn = function (result) {
   if (!result) return null
   result = result.map(n => {
-    return Object.assign({}, {...n}, {
+    return {
       key: n.key.slice(DATA_PATH.length),
-      value: (this._codec) ? this._codec.decode(n.value) : n.value
-    })
+      value: (this._codec) ? this._codec.decode(n.value) : n.value,
+      feed: n.feed,
+      seq: n.seq
+    }
   })
   if (this.map) result = result.map(n => this.map(n))
   if (this.reduce) result = result.reduce(this.reduce)
   return result
 }
 
-UnionDB.prototype._get = function (idx, key, cb) {
-  var self = this
-
-  if (!this._db) return process.nextTick(cb, new Error('Attempting to get from an uninitialized database.'))
+UnionDB.prototype._get = async function (idx, key) {
+  if (!this._db) throw new Error('Attempting to get from an uninitialized database.')
   if (idx === 0) {
-    return this._db.get(p.join(DATA_PATH, key), function (err, nodes) {
-      if (err) return cb(err)
-      if (!nodes) return cb(null, null)
-      return cb(null, self._prereturn(nodes))
-    })
+    let nodes = await get(this._db, p.join(DATA_PATH, key))
+    if (!nodes || !nodes.length) return null
+    console.log('_GET RETURNING:', nodes)
+    return this._prereturn(nodes)
   }
-  return this.parent.db._get(idx - 1, key, cb)
+  return this.parent.db._get(idx - 1, key)
 }
 
 UnionDB.prototype._makeIndex = function (key, idx, deleted, link) {
@@ -354,75 +321,23 @@ UnionDB.prototype._delLink = function (path, cb) {
   this._db.put(linkPath, this._makeIndex(linkPath, 0, true, cb))
 }
 
-UnionDB.prototype._getIndex = function (cb) {
-  var self = this
+UnionDB.prototype._getEntryValues = async function (key, entry) {
+  console.log('in _getEntryValues, key:', key, 'entry:', entry)
+  if (!entry) {
+    let nodes = await get(this._db, p.join(INDEX_PATH, key))
+    if (!nodes || !nodes.length) return null
+    let entries = nodes.map(n => messages.Entry.decode(n.value))
+    console.log('entries:', entries)
 
-  this._ready.then(function () {
-    self._isIndexed(function (err, indexed) {
-      if (err) return cb(err)
-      if (indexed || !self.parent) {
-        // If already indexed, or there's no parent, just spit out the contents of the INDEX subtree.
-        getLocalIndex(function (err, localIndex) {
-          if (err) return cb(err)
-          return cb(null, localIndex)
-        })
-      } else {
-        // Otherwise, recursively get the index of the parent and merge with our INDEX subtree.
-        self.parent.db._getIndex(function (err, parentIndex) {
-          if (err) return cb(err)
-          getLocalIndex(function (err, localIndex) {
-            if (err) return cb(err)
-            Object.keys(parentIndex).forEach(function (pkey) {
-              if (!localIndex[pkey]) {
-                var parentEntry = parentIndex[pkey]
-                parentEntry.layerIndex++
-                localIndex[pkey] = parentEntry
-              }
-            })
-            return cb(null, localIndex)
-          })
-        })
-      }
-    })
-  }).catch(function (err) {
-    return cb(err)
-  })
-
-  function getLocalIndex (cb) {
-    var allEntries = {}
-    self._db.list(INDEX_PATH, function (err, nodes) {
-      if (err) return cb(err)
-      if (!nodes || !nodes.length) return cb(null, allEntries)
-      // We only care about the last put for each key in the layer.
-      nodes.forEach(function (nodes) {
-        allEntries[nodes[0].key] = nodes.map(function (node) {
-          return messages.Entry.decode(node.value)
-        })
-      })
-      Object.keys(allEntries).forEach(function (key) {
-        var entries = allEntries[key]
-        allEntries[key] = resolveEntryConflicts(entries)
-      })
-      return cb(null, allEntries)
-    })
+    // If there are any conflicting entries, resolve them according to the the strategy above.
+    if (entries.length > 1) {
+      this.emit('conflict', key, entries)
+    }
+    entry = resolveEntryConflicts(entries)
   }
-}
-
-UnionDB.prototype._getEntryValues = function (key, nodes, cb) {
-  var entries = nodes.map(function (node) {
-    return messages.Entry.decode(node.value)
-  })
-
-  // If there are any conflicting entries, resolve them according to the the strategy above.
-  if (entries.length > 1) {
-    this.emit('conflict', key, entries)
-  }
-  var resolvedEntry = resolveEntryConflicts(entries)
-
-  if (resolvedEntry.deleted) {
-    return cb(null, null)
-  }
-  return this._get(resolvedEntry.layerIndex, key, cb)
+  if (entry.deleted) return null
+  if (entry.link) return entry.link
+  return this._get(entry.layerIndex, key)
 }
 
 // BEGIN Public API
@@ -430,7 +345,7 @@ UnionDB.prototype._getEntryValues = function (key, nodes, cb) {
 UnionDB.prototype.mount = async function (key, path, opts, cb) {
   if (typeof opts === 'function') return this.mount(key, path, null, opts)
   return maybe(cb, new Promise(async (resolve, reject) => {
-    await this.ready()
+    await this._ready
     this._putLink(key, path, opts, err => {
       if (err) return reject(err)
       return resolve()
@@ -444,79 +359,62 @@ UnionDB.prototype.get = async function (key, opts, cb) {
 
   var self = this
 
-  return maybe(cb, new Promise((resolve, reject) => {
-    this._ready.then(function () {
-      // If there's a link, recurse into the linked db.
-      var link = self._linkTrie.get(key, { enclosing: true })
-      if (link && link.localPath === key) {
-        // TODO: hacky way of getting link records.
-        // This shows that conflict handling for links needs to be fixed.
-        var linkMeta = Object.assign({}, link, { db: null })
-        return resolve([{
-          key,
-          value: linkMeta
-        }])
-      } else if (link) {
-        var remotePath = p.resolve(key.slice(link.localPath.length))
-        if (link.remotePath) remotePath = p.resolve(p.join(link.remotePath, remotePath))
-        return link.db.get(remotePath, opts, (err, nodes) => {
-          if (err) return reject(err)
-          return resolve(nodes)
-        })
-      }
+  return maybe(cb, new Promise(async (resolve, reject) => {
+    await this.ready()
+    // If there's a link, recurse into the linked db.
+    var link = self._linkTrie.get(key, { enclosing: true })
+    console.log('LINK FROM TRIE:', link)
+    if (link && link.localPath === key) {
+      // TODO: hacky way of getting link records.
+      // This shows that conflict handling for links needs to be fixed.
+      var linkMeta = Object.assign({}, link, { db: null })
+      return resolve([{
+        key,
+        value: linkMeta
+      }])
+    } else if (link) {
+      var remotePath = p.resolve(key.slice(link.localPath.length))
+      if (link.remotePath) remotePath = p.resolve(p.join(link.remotePath, remotePath))
+      let nodes = await link.db.get(remotePath, opts)
+      return resolve(fixKeys(link, nodes))
+    }
 
-      // Else, first check this database, then recurse into parents.
-      self._db.get(p.join(INDEX_PATH, key), function (err, nodes) {
-        if (err) return cb(err)
-        if ((!nodes || !nodes.length) && self.parent) {
-          return self.parent.db.get(key, opts, (err, values) => {
-            if (err) return reject(err)
-            return resolve(values)
-          })
-        }
+    let nodes = await this._getEntryValues(key)
+    if (nodes && nodes.deleted) return resolve(null)
 
-        if (!nodes || !nodes.length) return resolve(null)
+    if ((!nodes || !nodes.length) && self.parent) {
+      return resolve(this.parent.db.get(key, opts))
+    }
 
-        return self._getEntryValues(key, nodes, (err, values) => {
-          if (err) return reject(err)
-          return resolve(values)
-        })
-      })
-    }).catch(function (err) {
-      return reject(err)
-    })
+    return resolve(nodes)
   }))
 }
 
 UnionDB.prototype.put = async function (key, value, cb) {
-  var self = this
-
-  return maybe(cb, new Promise((resolve, reject) => {
-    this._ready.then(function () {
-      // If there's a link, recurse into the linked db.
-      if (self._links[key]) return cb(new Error('Cannot overwrite a symlink. Please delete first.'))
-      var link = self._linkTrie.get(key, { enclosing: true })
-      if (link) {
-        return link.db.put(key.slice(link.localPath), value, err => {
-          if (err) return reject(err)
-          return resolve()
-        })
-      }
-
-      var encoded = (self._codec) ? self._codec.encode(value) : value
-
-      var dataPath = p.join(DATA_PATH, key)
-
-      // TODO: This operation should be transactional.
-      self._db.put(dataPath, encoded, function (err) {
-        if (err) return cb(err)
-        self._putIndex(key, 0, false, function (err) {
-          if (err) return reject(err)
-          return resolve()
-        })
+  console.log('PUTTING:', key, value)
+  return maybe(cb, new Promise(async (resolve, reject) => {
+    await this.ready()
+    // If there's a link, recurse into the linked db.
+    if (this._links[key]) return cb(new Error('Cannot overwrite a symlink. Please delete first.'))
+    var link = this._linkTrie.get(key, { enclosing: true })
+    if (link) {
+      return link.db.put(key.slice(link.localPath), value, err => {
+        if (err) return reject(err)
+        return resolve()
       })
-    }).catch(function (err) {
-      return reject(err)
+    }
+
+    var encoded = (this._codec) ? this._codec.encode(value) : value
+
+    var dataPath = p.join(DATA_PATH, key)
+
+    // TODO: This operation should be transactional.
+    this._db.put(dataPath, encoded, err => {
+      if (err) return cb(err)
+      this._putIndex(key, 0, false, err => {
+        if (err) return reject(err)
+        return resolve()
+      })
     })
   }))
 }
@@ -588,97 +486,143 @@ UnionDB.prototype.del = async function (key, cb) {
  * Any future forks of this database will be able to take advantage of precomputed indices,
  * reducing the cost of indexing subsequent layers.
  */
-UnionDB.prototype.index = function (opts, cb) {
+UnionDB.prototype.index = async function (opts, cb) {
   if (typeof opts === 'function') return this.index(null, opts)
   opts = opts || {}
   var self = this
 
-  this._getIndex(function (err, index) {
-    if (err) return cb(err)
-    writeIndex(index)
-  })
+  return maybe(cb, new Promise(async (resolve, reject) => {
+    let indexed = await this._isIndexed()
 
-  function writeIndex (index) {
-    self._putIndices(index, function (err) {
-      if (err) return cb(err)
-      self.indexed = true
-      self._saveMetadata(function (err) {
-        if (err) return cb(err)
-        return cb()
+    // If we're already indexed, or there's nothing to index, return.
+    if (indexed || !this.parent) {
+      this.indexed = true
+      if (!this.versions) await this._saveMetadata()
+      return resolve()
+    }
+
+    // Else, apply the index streams for each parent (until we reach one that's indexed) in reverse order.
+    // This can be *very* expensive -- one should index often.
+    let entryStreams = await this._getIndexStreams()
+    for (let i = entryStreams.length - 1; i >= 0; i--) {
+      await indexLayer(entryStreams[i], i)
+    }
+    this.indexed = true
+    await this._saveMetadata()
+    return resolve()
+
+    async function indexLayer (entryStream, idx) {
+      let entryTransformStream = through.obj((entry, enc, cb) => {
+        console.log('INDEXING:', entry)
+        entry.layerIndex += idx
+        return cb(null, { key: p.join(INDEX_PATH, entry.key), value: messages.Entry.encode(entry) })
       })
-    })
-  }
-}
-
-UnionDB.prototype._findEntries = function (dir, cb) {
-  var self = this
-
-  self._db.list(dir, function (err, nodes) {
-    if (err) return cb(err)
-    if (!nodes || !nodes.length) return cb(null, {})
-    var entries = {}
-    nodes.forEach(function (nodes) {
-      var newEntries = nodes.map(function (node) {
-        return messages.Entry.decode(node.value)
-      })
-      entries[nodes[0].key] = resolveEntryConflicts(newEntries)
-    })
-    return cb(null, entries)
-  })
-}
-
-UnionDB.prototype._list = function (prefix, dir, cb) {
-  var self = this
-
-  this._isIndexed(function (err, indexed) {
-    if (err) return cb(err)
-    if (!indexed && self.parent) {
-      self.parent.db.ready().then(function () {
-        self.parent.db._findEntries(dir, function (err, parentEntries) {
-          if (err) return cb(err)
-          self._findEntries(dir, function (err, entries) {
-            if (err) return cb(err)
-            Object.assign(parentEntries, entries)
-            return processEntries(null, parentEntries)
-          })
+      return new Promise((resolve, reject) => {
+        pump(entryStream, entryTransformStream, self._db.createWriteStream(), async err => {
+          if (err) return reject(err)
+          return resolve()
         })
-      }).catch(function (err) {
-        return cb(err)
       })
-    } else {
-      self._findEntries(dir, processEntries)
     }
-  })
-
-  function processEntries (err, entries) {
-    if (err) return cb(err)
-    var list = []
-    for (var name in entries) {
-      if (!entries[name].deleted) {
-        list.push(name.slice(prefix.length))
-      }
-    }
-    return cb(null, list)
-  }
+  }))
 }
 
-UnionDB.prototype.list = async function (dir, cb) {
-  var self = this
-  return maybe(cb, new Promise((resolve, reject) => {
-    this._ready.then(function () {
-      return self._list(INDEX_PATH, p.join(INDEX_PATH, dir), (err, values) => {
-        if (err) return reject(err)
-        return resolve(values)
-      })
-    }).catch(function (err) {
-      return reject(err)
+UnionDB.prototype._getIndexStreams = async function () {
+  let entryStream = this._createEntryStream()
+  if (await this._isIndexed()) return entryStream
+  let parentStreams = this.parent ? await this.parent.db._getIndexStreams() : []
+  return [entryStream, ...parentStreams]
+}
+
+UnionDB.prototype._createEntryStream = function (prefix, opts) {
+  prefix = prefix || '/'
+  opts = opts || {}
+
+  let streams = []
+  let linksRoot = p.join(LINKS_PATH, prefix)
+  let linkStream = this._db.createPrefixReadStream(linksRoot, opts)
+  linkStream.on('data', data => console.log('LINK DATA:', data))
+  streams.push(linkStream)
+
+  if (!opts.onlyLinks) {
+    let entryRoot = p.join(INDEX_PATH, prefix)
+    let entryStream = this._db.createPrefixReadStream(entryRoot, opts)
+    console.log('ENTRY ROOT:', entryRoot)
+    entryStream.on('data', data => console.log('ENTRY DATA:', data))
+    entryStream.on('end', () => console.log('ENTRY STREAM ENDED'))
+    streams.push(entryStream)
+  }
+
+  let merged = merge(...streams)
+  merged.on('data', d => console.log('DATA:', d))
+  return pumpify.obj(merged, through.obj((nodes, enc, cb) => {
+    if (!nodes || !nodes.length) return cb(null, {})
+    var newEntries = nodes.map(function (node) {
+      return messages.Entry.decode(node.value)
     })
+    console.log('NEW ENTRIES:', newEntries)
+    let resolved = resolveEntryConflicts(newEntries)
+    // TODO: this could be better.
+    resolved.key = nodes[0].key.split('/').slice(1).join('/')
+    console.log('resolved:', resolved)
+    return cb(null, resolved)
+  }))
+}
+
+UnionDB.prototype._findEntries = async function (prefix, opts) {
+  console.log('in _findEntries')
+  let collected = await collect(this._createEntryStream(prefix, { recursive: false }))
+  console.log('COLLECTED:', collected)
+  return collected
+}
+
+UnionDB.prototype.createPrefixReadStream = function (prefix, opts) {
+  let self = this
+
+  var proxy = duplexify.obj()
+  proxy.pause()
+  proxy.setWritable(null)
+
+  const createStream = async () => {
+    await self.ready()
+
+    let indexed = await this._isIndexed()
+    if (!indexed) proxy.destroy(new Error('Can only create a read stream on an indexed database.'))
+
+    var link = self._linkTrie.get(prefix, { enclosing: true })
+    if (link) {
+      var remotePath = p.resolve(prefix.slice(link.localPath.length))
+      if (link.remotePath) remotePath = p.resolve(p.join(link.remotePath, remotePath))
+      let linkStream = link.db.createPrefixReadStream(remotePath, opts)
+      proxy.setReadable(pumpify.obj(linkStream, through.obj((nodes, enc, cb) => {
+        return cb(null, fixKeys(link, nodes))
+      })))
+      proxy.resume()
+      return
+    }
+
+    let entryStream = self._createEntryStream(prefix, opts)
+    let resolvedStream = through.obj(async (entry, enc, cb) => {
+      return cb(null, await this._getEntryValues(entry.key, entry))
+    })
+    proxy.setReadable(pumpify.obj(entryStream, resolvedStream))
+    proxy.resume()
+  }
+  createStream()
+
+  return proxy
+}
+
+UnionDB.prototype.list = async function (prefix, cb) {
+  return maybe(cb, new Promise(async (resolve, reject) => {
+    return resolve(await collect(this.createPrefixReadStream(prefix, { recursive: false })))
   }))
 }
 
 /**
  * TODO: this will currently not traverse into symlinks *during* iteration. If the entire range
  * is contained within a symlink, then that will still work.
+ * TODO: THIS IS CURRENTLY BROKEN
  */
 UnionDB.prototype.lexIterator = function (opts) {
   // TODO: Support for non-indexed dbs.
@@ -860,39 +804,34 @@ UnionDB.prototype.replicate = function (opts) {
   return self._db.replicate(opts)
 }
 
-UnionDB.prototype.fork = function (opts, cb) {
+UnionDB.prototype.fork = async function (opts, cb) {
   if (typeof opts === 'function') return this.fork(null, opts)
   opts = opts || {}
   var self = this
 
-  if (opts.version) return process.nextTick(finish, opts.version)
-  this.version(function (err, version) {
-    if (err) return cb(err)
-    finish(version)
-  })
-
-  function finish (version) {
-    self._createUnionDB(null, Object.assign({}, self.opts, {
+  return maybe(cb, new Promise(async (resolve, reject) => {
+    let version = opts.version
+    if (!version) version = await this.version()
+    let db = await self._createUnionDB(null, Object.assign({}, self.opts, {
       parent: {
         key: self.key,
         version: version
       }
-    }), cb)
-  }
+    }))
+    return resolve(db)
+  }))
 }
 
 UnionDB.prototype.sub = async function (path, opts, cb) {
   if (typeof opts === 'function') return this.sub(path, null, opts)
   opts = opts || {}
 
-  return maybe(cb, new Promise((resolve, reject) => {
-    this._createUnionDB(null, opts, (err, db) => {
-      if (err) return reject(err)
-      this.mount(db.key, path, opts, err => {
-        if (err) return reject(err)
-        return resolve(db)
-      })
-    })
+  return maybe(cb, new Promise(async (resolve, reject) => {
+    let link = this._linkTrie.get(path)
+    if (link) return resolve(link.db)
+    let db = await this._createUnionDB(null, opts)
+    await this.mount(db.key, path, opts)
+    return resolve(db)
   }))
 }
 
@@ -946,4 +885,51 @@ UnionDB.prototype.version = async function (cb) {
 
 function linkPath (link, prefix) {
   return p.join(link.remotePath, prefix.slice(link.localPath.length))
+}
+
+function fixKeys (link, nodes) {
+  return nodes.map(n => {
+    return {
+      key: p.join(link.localPath, n.key),
+      value: n.value,
+      feed: n.feed,
+      seq: n.seq
+    }
+  })
+}
+
+async function collect (stream) {
+  return new Promise((resolve, reject) => {
+    let result = []
+    stream.on('data', d => result.push(d))
+    stream.once('end', () => resolve(result))
+    stream.once('error', err => reject(err))
+  })
+}
+
+async function get (db, key) {
+  return new Promise((resolve, reject) => {
+    db.get(key, (err, nodes) => {
+      if (err) return reject(err)
+      return resolve(nodes)
+    })
+  })
+}
+
+async function put (db, key, value) {
+  return new Promise((resolve, reject) => {
+    db.put(key, value, err => {
+      if (err) return reject(err)
+      return resolve()
+    })
+  })
+}
+
+async function ready (db) {
+  return new Promise((resolve, reject) => {
+    db.ready(err => {
+      if (err) return reject(err)
+      return resolve()
+    })
+  })
 }

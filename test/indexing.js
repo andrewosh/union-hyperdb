@@ -13,8 +13,10 @@ test('put/get with an index and one layer', function (t) {
     ]
   ], function (err, db) {
     t.error(err)
+    console.log('calling index')
     db.index(function (err) {
       t.error(err)
+      console.log('called index')
       verify.values(t, db, { 'a': 'hello', 'b': 'goodbye' })
     })
   })

@@ -1,7 +1,7 @@
 var test = require('tape')
 var create = require('./helpers/create')
 
-test('can iterate over local values without layers', t => {
+test.skip('can iterate over local values without layers', t => {
   create.fromLayers([
     [
       { type: 'put', key: 'a', value: 'hello' },
@@ -23,7 +23,7 @@ test('can iterate over local values without layers', t => {
   })
 })
 
-test('multiple layer iteration fails without indexing', t => {
+test.skip('multiple layer iteration fails without indexing', t => {
   create.fromLayers([
     [
       { type: 'put', key: 'a', value: 'hello' },
@@ -44,7 +44,7 @@ test('multiple layer iteration fails without indexing', t => {
   })
 })
 
-test('can iterate over local values in multiple layers', t => {
+test.skip('can iterate over local values in multiple layers', t => {
   create.fromLayers([
     [
       { type: 'put', key: 'a', value: 'hello' },
@@ -68,7 +68,7 @@ test('can iterate over local values in multiple layers', t => {
   })
 })
 
-test('can iterate within a single symlink', t => {
+test.skip('can iterate within a single symlink', t => {
   create.fromLayers([
     [
       { type: 'put', key: 'z', value: 'hello' },
