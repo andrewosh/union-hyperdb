@@ -16,7 +16,7 @@ test('a link can be created and read', function (t) {
       db.get('link', function (err, nodes) {
         t.error(err)
         t.same(nodes.length, 1)
-        t.same(nodes[0].value.localPath, 'link')
+        t.same(nodes[0].value.localPath, '/link')
         t.end()
       })
     })
@@ -24,7 +24,7 @@ test('a link can be created and read', function (t) {
 })
 
 test('simple read from a mount works', function (t) {
-  t.plan(1 + 3 * 3)
+  t.plan(13)
 
   create.fromLayers([
     [
@@ -37,7 +37,7 @@ test('simple read from a mount works', function (t) {
   ], function (err, db) {
     t.error(err)
     verify.values(t, db, {
-      'b/a': 'hello',
+      '/b/a': 'hello',
       'a': 'hello',
       'c': 'goodbye'
     })
@@ -45,7 +45,7 @@ test('simple read from a mount works', function (t) {
 })
 
 test('read from a mount with a remote link works', function (t) {
-  t.plan(1 + 3 * 2)
+  t.plan(9)
 
   create.fromLayers([
     [
@@ -58,14 +58,14 @@ test('read from a mount with a remote link works', function (t) {
   ], function (err, db) {
     t.error(err)
     verify.values(t, db, {
-      'b/c': 'hello',
+      '/b/c': 'hello',
       'd': 'goodbye'
     })
   })
 })
 
 test('parent layers have frozen links', function (t) {
-  t.plan(4 + 3 * 3)
+  t.plan(16)
 
   create.fromLayers([
     [
@@ -78,19 +78,21 @@ test('parent layers have frozen links', function (t) {
     [
       { type: 'put', key: 'd', value: 'something' }
     ]
-  ], function (err, topLayer, layers) {
+  ], async function (err, topLayer, layers) {
     t.error(err)
 
     var firstLayer = layers[0]
     var secondLayer = layers[1]
 
+    await topLayer.index()
+
     firstLayer.put('a', 'world', function (err) {
       t.error(err)
       secondLayer.get('b/a', function (err, nodes) {
-        t.error(err)
-        t.same(nodes[0].value, 'world')
+        t.error(err, 'right here ya are')
+        t.same(nodes[0].value, 'world', 'wait not here?')
         verify.values(t, topLayer, {
-          'b/a': 'hello',
+          '/b/a': 'hello',
           'c': 'goodbye',
           'd': 'something'
         })

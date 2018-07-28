@@ -19,9 +19,10 @@ function verifyIndices (t, db, indicesByKey) {
 function verifyValues (t, db, valuesByKey) {
   Object.keys(valuesByKey).forEach(function (key) {
     db.get(key, function (err, nodes) {
-      t.error(err)
+      t.error(err, 'errr')
       t.same(nodes.length, 1)
       t.same(nodes[0].value, valuesByKey[key])
+      t.same(nodes[0].key, key)
     })
   })
 }

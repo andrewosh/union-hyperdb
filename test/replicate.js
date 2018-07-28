@@ -5,7 +5,7 @@ var create = require('./helpers/create')
 var verify = require('./helpers/verify')
 
 test('should replicate without any layers', function (t) {
-  t.plan(3 + 3 * 1)
+  t.plan(7)
 
   create.two(function (err, db1, db2) {
     t.error(err)
@@ -22,7 +22,7 @@ test('should replicate without any layers', function (t) {
 })
 
 test('should replicate between two databases with no local changes', function (t) {
-  t.plan(2 + 3 * 2)
+  t.plan(10)
 
   create.twoFromLayers([
     [

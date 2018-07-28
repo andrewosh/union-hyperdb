@@ -4,7 +4,7 @@ var create = require('./helpers/create')
 var verify = require('./helpers/verify')
 
 test('put/get with an index and one layer', function (t) {
-  t.plan(2 + 3 * 2)
+  t.plan(10)
 
   create.fromLayers([
     [
@@ -23,7 +23,7 @@ test('put/get with an index and one layer', function (t) {
 })
 
 test('put/get with an index and two layers', function (t) {
-  t.plan(2 + 3 * 3)
+  t.plan(14)
 
   create.fromLayers([
     [
@@ -44,7 +44,7 @@ test('put/get with an index and two layers', function (t) {
 })
 
 test('index entries are correctly added', function (t) {
-  t.plan(2 + 3 * 4 + 3 * 4)
+  t.plan(30)
   create.fromLayers([
     [
      { type: 'put', key: 'a', value: 'hello' },
