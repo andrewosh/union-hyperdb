@@ -10,7 +10,10 @@
     "cmp": "0.0.2",
     "codecs": "^1.2.0",
     "duplexify": "^3.6.0",
+    "from": "^0.1.7",
+    "lru": "^3.1.0",
     "merge-stream": "^1.0.1",
+    "mutexify": "^1.2.0",
     "nanoiterator": "^1.2.0",
     "pify": "^3.0.0",
     "protocol-buffers": "^4.0.2",
@@ -29,7 +32,7 @@
     "tape": "^4.8.0"
   },
   "scripts": {
-    "test": "standard && tape test/*.js && rimraf test/test-storage"
+    "test": "standard && tape test/*.js; rimraf test/test-storage"
   },
   "keywords": [
     "hyperdb",
