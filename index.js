@@ -175,7 +175,8 @@ UnionDB.prototype._loadDatabase = async function (key, opts) {
 UnionDB.prototype._loadLinkDB = async function (linkRecord) {
   let version = this.linkVersions && this.linkVersions[linkRecord.localPath]
   return this._loadDatabase(linkRecord.db.key, {
-    version: version || linkRecord.db.version
+    version: version || linkRecord.db.version,
+    valueEncoding: linkRecord.valueEncoding || this.opts.valueEncoding
   })
 }
 
@@ -841,7 +842,6 @@ UnionDB.prototype.fork = async function (opts, cb) {
   }))
 }
 
-// TODO: value-encoding is currently broken.
 UnionDB.prototype.sub = async function (path, opts, cb) {
   if (typeof opts === 'function') return this.sub(path, null, opts)
   opts = opts || {}
