@@ -10,7 +10,7 @@ union-hyperdb is a wrapper around multiple [hyperdbs](https://github.com/mafinto
 No external indexing is required, and sub-dbs are instantiated dynamically when first needed.
 
 ### Installation
-`npm i multi-append-tree`
+`npm i union-hyperdb`
 
 ### Usage
 
